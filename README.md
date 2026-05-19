@@ -1,4 +1,4 @@
-# EvoMAS — Evolutionary Synthesis of Multi-Agent Systems
+# EvoMAS - Evolutionary Generation of Multi-Agent Systems
 
 This repository implements the following paper:
 
