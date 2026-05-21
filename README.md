@@ -3,7 +3,7 @@
 This repository implements the following paper:
 
 > **Evolutionary Generation of Multi-Agent Systems**
-> Yuntong Hu, Matthew Trager, Yuting Zhang, Yi Zhang, Shuo Yang, Wei Xia, Stefano Soatto
+> Yuntong Hu, Yuting Zhang, Matthew Trager, Yi Zhang, Shuo Yang, Wei Xia, Stefano Soatto
 > *ICML 2026*
 > [[arXiv]](https://arxiv.org/abs/2602.06511)
 
