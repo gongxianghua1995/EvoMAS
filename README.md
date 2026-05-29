@@ -2,10 +2,14 @@
 
 This repository implements the following paper:
 
-> **Evolutionary Generation of Multi-Agent Systems**
+> **EvoMAS: Evolutionary Generation of Multi-Agent Systems**
 > Yuntong Hu, Yuting Zhang, Matthew Trager, Yi Zhang, Shuo Yang, Wei Xia, Stefano Soatto
 > *ICML 2026*
 > [[arXiv]](https://arxiv.org/abs/2602.06511)
+
+This project is released under the [CC BY-NC 4.0](LICENSE) license. You are free to share and adapt the material for non-commercial purposes, with appropriate credit to the authors. Commercial use is not permitted.
+
+---
 
 EvoMAS uses an LLM meta-model as an evolutionary operator to select, mutate,
 and cross over MAS configurations from a pool, evaluating them on target
