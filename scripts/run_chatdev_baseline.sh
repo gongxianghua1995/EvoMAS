@@ -34,12 +34,11 @@ echo "======================================================================"
 
 run_domain() {
     local domain=$1
-    local task_ids=$2
     local output_dir="output/chatdev_${domain}"
 
     mkdir -p "$output_dir"
 
-    local count=$(echo "$task_ids" | tr ',' '\n' | wc -l)
+    local count=$(wc -l < "scripts/selected_${domain}.txt")
 
     echo ""
     echo "----------------------------------------------------------------------"
@@ -50,7 +49,7 @@ run_domain() {
     conda run -n evomas --no-capture-output python -u main.py \
         --dataset "$DATASET" \
         --baseline "$BASELINE" \
-        --task-ids "$task_ids" \
+        --task-ids-file "scripts/selected_${domain}.txt" \
         --llm-as-judge "$JUDGE" \
         $EVAL_ON_SAVE \
         --output-dir "$output_dir" \
@@ -59,13 +58,15 @@ run_domain() {
     echo "# Completed: $domain at $(date)" | tee -a "$LOG_FILE"
 }
 
-# Clear log and run sequentially in background
+export -f run_domain
+
+# Clear log and run in background
 > "$LOG_FILE"
 
-run_domain "django" "$(paste -sd',' scripts/selected_django.txt)" &
-run_domain "sympy" "$(paste -sd',' scripts/selected_sympy.txt)" &
-run_domain "matplotlib" "$(paste -sd',' scripts/selected_matplotlib.txt)" &
-run_domain "scikit-learn" "$(paste -sd',' scripts/selected_scikit-learn.txt)" &
+run_domain "django" &
+run_domain "sympy" &
+run_domain "matplotlib" &
+run_domain "scikit-learn" &
 
 wait
 
