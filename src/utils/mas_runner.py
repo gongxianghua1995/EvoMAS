@@ -404,7 +404,7 @@ class MasRunner:
         self.llm_as_judge = llm_as_judge
         # Auto-increase timeout for SWE-bench datasets (agents need more time due to code exploration)
         if task_timeout == 600.0 and ('swe' in dataset_name.lower() or dataset_name in ['swebench', 'swebench_lite', 'swebench_verified']):
-            self.task_timeout = 1800.0  # 30 minutes for SWE-bench tasks
+            self.task_timeout = 3600.0  # 60 minutes for SWE-bench tasks
         else:
             self.task_timeout = task_timeout
         self.evaluate_on_save = evaluate_on_save

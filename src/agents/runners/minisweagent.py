@@ -25,6 +25,33 @@ from .base import BaseAgentRunner
 
 logger = logging.getLogger(__name__)
 
+# Token counter using tiktoken (cl100k_base encoding for ChatGPT compatibility)
+_tiktoken_encoder = None
+
+
+def _get_tiktoken_encoder():
+    """Lazy-load tiktoken encoder for token counting."""
+    global _tiktoken_encoder
+    if _tiktoken_encoder is None:
+        try:
+            import tiktoken
+            _tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
+        except ImportError:
+            logger.warning("tiktoken not installed, token counting will be skipped")
+            _tiktoken_encoder = None
+    return _tiktoken_encoder
+
+
+def _count_tokens(text: str) -> int:
+    """Count tokens in text using tiktoken."""
+    enc = _get_tiktoken_encoder()
+    if enc is None:
+        return 0
+    try:
+        return len(enc.encode(text, allowed_special="all"))
+    except Exception:
+        return 0
+
 
 # Prepended to every SWE-bench problem statement to counter the "over-analysis"
 # death spiral: agent keeps running `git show`/`git log -S`/`cat` on historical
@@ -83,14 +110,6 @@ def _wrap_query_with_step_logger(model: Any, agent_id: str, work_dir: Optional[P
     if not hasattr(model, 'total_input_tokens'):
         model.total_input_tokens = 0
         model.total_output_tokens = 0
-    FRAMEWORK_NUDGE = "No tool calls found in the response. Every response MUST include at least one tool call."
-    cd_prefix = f"cd {work_dir} && " if work_dir else ""
-    SUBMIT_CMD = f"{cd_prefix}echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT ; git add -A 2>/dev/null ; git diff --cached 2>/dev/null ; true"
-    POST_PASSED_GRACE = 15
-    PASSED_MARKER_RE = re.compile(r"(\d+ passed|all tests? passed|PASSED)", re.IGNORECASE)
-
-    submit_forced = [False]
-    passed_at_step = [None]
 
     def _fmt_response(response) -> str:
         if not isinstance(response, dict):
@@ -112,71 +131,12 @@ def _wrap_query_with_step_logger(model: Any, agent_id: str, work_dir: Optional[P
                 parts.append(f"[tool_call {i}] {fn.get('name', '?')}({fn.get('arguments', '')})")
         return "\n\n".join(parts) if parts else "<empty>"
 
-    def _force_submit(response: dict) -> dict:
-        """Rewrite response so the next env step executes the submit command."""
-        extra = response.setdefault("extra", {})
-        actions = extra.get("actions") or []
-        forced_action = {"command": SUBMIT_CMD}
-        if actions and isinstance(actions[0], dict) and "tool_call_id" in actions[0]:
-            forced_action["tool_call_id"] = actions[0]["tool_call_id"]
-        extra["actions"] = [forced_action]
-        tcs = response.get("tool_calls") or []
-        if tcs and isinstance(tcs[0], dict):
-            import json as _json
-            tcs[0].setdefault("function", {})["arguments"] = _json.dumps({"command": SUBMIT_CMD})
-            tcs[0]["function"]["name"] = "bash"
-            response["tool_calls"] = [tcs[0]]
-        return response
-
     def logged_query(messages, **kwargs):
         step_counter[0] += 1
         step = step_counter[0]
         started = _time.time()
 
-        forced_here = False
-        reason = None
-
-        if passed_at_step[0] is None and messages:
-            last = messages[-1]
-            if last.get("role") in ("tool", "observation"):
-                last_content = str(last.get("content") or "")
-                if PASSED_MARKER_RE.search(last_content):
-                    passed_at_step[0] = step - 1
-                    logger.info(
-                        f"[LLM {agent_id} step {step}] Pytest PASSED detected in "
-                        f"observation (grace window: {POST_PASSED_GRACE} more steps)."
-                    )
-
-        if not submit_forced[0] and step >= 3 and messages:
-            last = messages[-1]
-            last_role = last.get("role")
-            last_content = str(last.get("content") or "") if last_role else ""
-
-            if last_role in ("user", "tool", "observation") and FRAMEWORK_NUDGE in last_content:
-                reason = "framework nudged for a tool call"
-            elif (
-                passed_at_step[0] is not None
-                and step - passed_at_step[0] >= POST_PASSED_GRACE
-            ):
-                reason = (
-                    f"post-PASSED grace of {POST_PASSED_GRACE} steps expired "
-                    f"(passed at step {passed_at_step[0]})"
-                )
-
-            if reason:
-                logger.warning(
-                    f"[LLM {agent_id} step {step}] Forcing submit ({reason})."
-                )
-                response = {
-                    "content": "",
-                    "role": "assistant",
-                    "extra": {"actions": [{"command": SUBMIT_CMD}]},
-                }
-                submit_forced[0] = True
-                forced_here = True
-
-        if not forced_here:
-            response = original_query(messages, **kwargs)
+        response = original_query(messages, **kwargs)
         duration = _time.time() - started
 
         # Strip empty tool_calls (DashScope rejects them in history)
@@ -199,6 +159,14 @@ def _wrap_query_with_step_logger(model: Any, agent_id: str, work_dir: Optional[P
             ct = getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", 0)
             model.total_input_tokens += int(pt)
             model.total_output_tokens += int(ct)
+
+        # Fallback: if API didn't return usage (e.g. Deepseek), use tiktoken to count
+        if model.total_input_tokens == 0 and model.total_output_tokens == 0:
+            input_text = ""
+            for msg in (messages or []):
+                input_text += msg.get("content", "")
+            model.total_input_tokens += _count_tokens(input_text)
+            model.total_output_tokens += _count_tokens(_fmt_response(response))
 
         out_text = _fmt_response(response)
         if len(out_text) > 2000:
@@ -439,7 +407,7 @@ class MinisweagentRunner(BaseAgentRunner):
         # Kept low because the post-PASSED grace + framework-nudge safety net
         # should submit within ~step_at_passed + 15; anything past that is spin.
         if 'step_limit' not in self.agent_config or self.agent_config.get('step_limit') == 0:
-            self.agent_config['step_limit'] = 50
+            self.agent_config['step_limit'] = 300
         if 'cost_limit' not in self.agent_config or self.agent_config.get('cost_limit') == 0:
             self.agent_config['cost_limit'] = 10.0  # Default $10 budget
 
