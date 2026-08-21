@@ -1,0 +1,32 @@
+diff --git a/sympy/printing/pycode.py b/sympy/printing/pycode.py
+index a3f0310735..38f0d5487e 100644
+--- a/sympy/printing/pycode.py
++++ b/sympy/printing/pycode.py
+@@ -226,6 +226,10 @@ def _print_Mod(self, expr):
+         PREC = precedence(expr)
+         return ('{0} % {1}'.format(*map(lambda x: self.parenthesize(x, PREC), expr.args)))
+ 
++    def _print_Indexed(self, expr):
++        base, *index = expr.args
++        return "{}[{}]".format(str(base), ", ".join([self._print(ind) for ind in index]))
++
+     def _print_Piecewise(self, expr):
+         result = []
+         i = 0
+diff --git a/sympy/printing/tests/test_pycode.py b/sympy/printing/tests/test_pycode.py
+index f1a9a37898..06d61bba02 100644
+--- a/sympy/printing/tests/test_pycode.py
++++ b/sympy/printing/tests/test_pycode.py
+@@ -96,3 +96,12 @@ def test_NumPyPrinter_print_seq():
+     n = NumPyPrinter()
+ 
+     assert n._print_seq(range(2)) == '(0, 1,)'
++
++
++def test_Indexed():
++    from sympy.tensor import IndexedBase
++    i, j = symbols('i j')
++    p = IndexedBase('p')
++    assert pycode(p[0]) == 'p[0]'
++    assert pycode(p[0, 1]) == 'p[0, 1]'
++    assert pycode(p[i, j]) == 'p[i, j]'

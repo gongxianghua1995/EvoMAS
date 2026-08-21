@@ -1,0 +1,95 @@
+diff --git a/django/db/migrations/autodetector.py b/django/db/migrations/autodetector.py
+index 30616c0172..c8ec502a1e 100644
+--- a/django/db/migrations/autodetector.py
++++ b/django/db/migrations/autodetector.py
+@@ -559,10 +559,39 @@ class MigrationAutodetector:
+                 (app_label, model_name, None, False),
+             ]
+             # Depend on all bases
++            ancestor_bases = []
+             for base in model_state.bases:
+                 if isinstance(base, str) and "." in base:
+                     base_app_label, base_name = base.split(".", 1)
+                     dependencies.append((base_app_label, base_name, None, True))
++                    ancestor_bases.append((base_app_label, base_name))
++            # Depend on the removal of fields that are both defined on this
++            # model and present on one of its bases in the old state. This is
++            # necessary when a field is moved from a base class to a subclass
++            # in the same migration, as otherwise creating the subclass would
++            # clash with the inherited field that still exists on the base.
++            seen_bases = set(ancestor_bases)
++            while ancestor_bases:
++                base_app_label, base_name = ancestor_bases.pop()
++                base_model_state = self.from_state.models.get(
++                    (base_app_label, base_name.lower())
++                )
++                if base_model_state is not None:
++                    for field_name in model_state.fields:
++                        if field_name in base_model_state.fields:
++                            dependencies.append(
++                                (base_app_label, base_name, field_name, False)
++                            )
++                base_state = self.to_state.models.get(
++                    (base_app_label, base_name.lower())
++                )
++                if base_state is not None:
++                    for base in base_state.bases:
++                        if isinstance(base, str) and "." in base:
++                            ancestor_base = tuple(base.split(".", 1))
++                            if ancestor_base not in seen_bases:
++                                seen_bases.add(ancestor_base)
++                                ancestor_bases.append(ancestor_base)
+             # Depend on the other end of the primary key if it's a relation
+             if primary_key_rel:
+                 dependencies.append((
+diff --git a/tests/migrations/test_autodetector.py b/tests/migrations/test_autodetector.py
+index daff57fc2c..2abbc7afc7 100644
+--- a/tests/migrations/test_autodetector.py
++++ b/tests/migrations/test_autodetector.py
+@@ -2454,3 +2454,46 @@ class AutodetectorTests(TestCase):
+         self.assertNumberMigrations(changes, 'app', 1)
+         self.assertOperationTypes(changes, 'app', 0, ['DeleteModel'])
+         self.assertOperationAttributes(changes, 'app', 0, 0, name='Dog')
++
++    def test_mti_inheritance_remove_base_field_add_to_subclass(self):
++        readable = ModelState('app', 'Readable', [
++            ('id', models.AutoField(primary_key=True)),
++            ('title', models.CharField(max_length=200)),
++        ])
++        readable_no_title = ModelState('app', 'Readable', [
++            ('id', models.AutoField(primary_key=True)),
++        ])
++        book = ModelState('app', 'Book', [
++            ('title', models.CharField(max_length=200)),
++        ], bases=('app.Readable',))
++        changes = self.get_changes([readable], [readable_no_title, book])
++        self.assertNumberMigrations(changes, 'app', 1)
++        self.assertOperationTypes(
++            changes, 'app', 0, ['RemoveField', 'CreateModel'],
++        )
++        self.assertOperationAttributes(changes, 'app', 0, 0, name='title', model_name='readable')
++        self.assertOperationAttributes(changes, 'app', 0, 1, name='Book')
++
++    def test_mti_inheritance_remove_base_field_add_to_multiple_subclasses(self):
++        readable = ModelState('app', 'Readable', [
++            ('id', models.AutoField(primary_key=True)),
++            ('title', models.CharField(max_length=200)),
++        ])
++        readable_no_title = ModelState('app', 'Readable', [
++            ('id', models.AutoField(primary_key=True)),
++        ])
++        book = ModelState('app', 'Book', [
++            ('title', models.CharField(max_length=200)),
++        ], bases=('app.Readable',))
++        magazine = ModelState('app', 'Magazine', [
++            ('title', models.CharField(max_length=200)),
++        ], bases=('app.Readable',))
++        changes = self.get_changes([readable], [readable_no_title, book, magazine])
++        self.assertNumberMigrations(changes, 'app', 1)
++        self.assertOperationTypes(
++            changes, 'app', 0,
++            ['RemoveField', 'CreateModel', 'CreateModel'],
++        )
++        self.assertOperationAttributes(changes, 'app', 0, 0, name='title', model_name='readable')
++        self.assertOperationAttributes(changes, 'app', 0, 1, name='Book')
++        self.assertOperationAttributes(changes, 'app', 0, 2, name='Magazine')

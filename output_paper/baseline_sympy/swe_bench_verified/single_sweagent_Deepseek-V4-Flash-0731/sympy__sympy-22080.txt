@@ -1,0 +1,40 @@
+diff --git a/sympy/printing/codeprinter.py b/sympy/printing/codeprinter.py
+index ba0e746f5d..4dad5f601e 100644
+--- a/sympy/printing/codeprinter.py
++++ b/sympy/printing/codeprinter.py
+@@ -9,7 +9,7 @@
+ from sympy.core.mul import _keep_coeff
+ from sympy.core.symbol import Symbol
+ from sympy.printing.str import StrPrinter
+-from sympy.printing.precedence import precedence
++from sympy.printing.precedence import precedence, PRECEDENCE
+ 
+ 
+ class requires:
+@@ -459,6 +459,14 @@ def _print_Mul(self, expr):
+         if c < 0:
+             expr = _keep_coeff(-c, e)
+             sign = "-"
++            # When the expression is negative it is printed with a unary
++            # minus.  In most target languages (e.g. Python and C) unary
++            # minus binds tighter than the multiplicative operators (e.g.
++            # ``*`` and ``%``) so factors such as ``Mod`` must be
++            # parenthesized using the multiplicative precedence rather than
++            # the additive precedence used by ``precedence(expr)`` for
++            # negative ``Mul``.
++            prec = PRECEDENCE["Mul"]
+         else:
+             sign = ""
+ 
+diff --git a/sympy/printing/precedence.py b/sympy/printing/precedence.py
+index 47ff463faf..9a2c9c21d9 100644
+--- a/sympy/printing/precedence.py
++++ b/sympy/printing/precedence.py
+@@ -48,6 +48,7 @@
+     "KroneckerProduct": PRECEDENCE["Mul"],
+     "Equality": PRECEDENCE["Mul"],
+     "Unequality": PRECEDENCE["Mul"],
++    "Mod": PRECEDENCE["Mul"],
+ }
+ 
+ # Sometimes it's not enough to assign a fixed precedence value to a

@@ -1,0 +1,45 @@
+diff --git a/django/forms/boundfield.py b/django/forms/boundfield.py
+index 2ff8b0ee26..f257cf28ae 100644
+--- a/django/forms/boundfield.py
++++ b/django/forms/boundfield.py
+@@ -277,7 +277,7 @@ class BoundWidget:
+ 
+     @property
+     def id_for_label(self):
+-        return 'id_%s_%s' % (self.data['name'], self.data['index'])
++        return self.data['attrs'].get('id', '')
+ 
+     @property
+     def choice_label(self):
+diff --git a/tests/forms_tests/tests/test_forms.py b/tests/forms_tests/tests/test_forms.py
+index f3ee64ceda..23d9b1790e 100644
+--- a/tests/forms_tests/tests/test_forms.py
++++ b/tests/forms_tests/tests/test_forms.py
+@@ -720,11 +720,26 @@ Java</label></li>
+         fields = list(BeatleForm(auto_id=False)['name'])
+         self.assertEqual(len(fields), 4)
+ 
+-        self.assertEqual(fields[0].id_for_label, 'id_name_0')
++        self.assertEqual(fields[0].id_for_label, '')
+         self.assertEqual(fields[0].choice_label, 'John')
+         self.assertHTMLEqual(fields[0].tag(), '<option value="john">John</option>')
+         self.assertHTMLEqual(str(fields[0]), '<option value="john">John</option>')
+ 
++    def test_form_with_iterable_boundfield_custom_id(self):
++        class BeatleForm(Form):
++            name = ChoiceField(
++                choices=[('john', 'John'), ('paul', 'Paul')],
++                widget=CheckboxSelectMultiple,
++            )
++        fields = list(BeatleForm(auto_id='custom_%s')['name'])
++        self.assertEqual(len(fields), 2)
++        self.assertEqual(fields[0].id_for_label, 'custom_name_0')
++        self.assertEqual(fields[1].id_for_label, 'custom_name_1')
++        self.assertHTMLEqual(
++            fields[0].tag(),
++            '<input type="checkbox" name="name" value="john" id="custom_name_0">',
++        )
++
+     def test_form_with_noniterable_boundfield(self):
+         # You can iterate over any BoundField, not just those with widget=RadioSelect.
+         class BeatleForm(Form):

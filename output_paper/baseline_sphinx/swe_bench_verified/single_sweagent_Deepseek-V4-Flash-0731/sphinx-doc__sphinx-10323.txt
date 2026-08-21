@@ -1,0 +1,53 @@
+diff --git a/CHANGES b/CHANGES
+index 7037723fe..e18d62958 100644
+--- a/CHANGES
++++ b/CHANGES
+@@ -72,6 +72,8 @@ Bugs fixed
+   bulding texinfo document
+ * #10000: LaTeX: glossary terms with common definition are rendered with
+   too much vertical whitespace
++* #10381: literalinclude: ``dedent`` option is now applied to the included file
++  only, not to the ``prepend`` and ``append`` content
+ 
+ Testing
+ --------
+diff --git a/sphinx/directives/code.py b/sphinx/directives/code.py
+index dc44ed314..9437fe9a5 100644
+--- a/sphinx/directives/code.py
++++ b/sphinx/directives/code.py
+@@ -224,9 +224,9 @@ class LiteralIncludeReader:
+                        self.start_filter,
+                        self.end_filter,
+                        self.lines_filter,
++                       self.dedent_filter,
+                        self.prepend_filter,
+-                       self.append_filter,
+-                       self.dedent_filter]
++                       self.append_filter]
+             lines = self.read_file(self.filename, location=location)
+             for func in filters:
+                 lines = func(lines, location=location)
+diff --git a/tests/test_directive_code.py b/tests/test_directive_code.py
+index 98a9aa899..9a9c1d331 100644
+--- a/tests/test_directive_code.py
++++ b/tests/test_directive_code.py
+@@ -216,6 +216,19 @@ def test_LiteralIncludeReader_prepend(literal_inc_path):
+                        "Sphinx\n")
+ 
+ 
++@pytest.mark.xfail(os.name != 'posix', reason="Not working on windows")
++def test_LiteralIncludeReader_prepend_append_dedent(literal_inc_path):
++    # dedent is applied to the included file only, not to prepend/append
++    options = {'lines': '9-11', 'dedent': 4, 'prepend': 'Hello', 'append': 'World'}
++    reader = LiteralIncludeReader(literal_inc_path, options, DUMMY_CONFIG)
++    content, lines = reader.read()
++    assert content == ("Hello\n"
++                       "def baz():\n"
++                       "    pass\n"
++                       "\n"
++                       "World\n")
++
++
+ @pytest.mark.xfail(os.name != 'posix', reason="Not working on windows")
+ def test_LiteralIncludeReader_dedent(literal_inc_path):
+     # dedent: 2

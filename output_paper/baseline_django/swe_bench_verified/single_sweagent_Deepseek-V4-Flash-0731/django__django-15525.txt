@@ -1,0 +1,114 @@
+diff --git a/django/core/serializers/base.py b/django/core/serializers/base.py
+index da85cb4b92..517d2cad85 100644
+--- a/django/core/serializers/base.py
++++ b/django/core/serializers/base.py
+@@ -336,7 +336,9 @@ def build_instance(Model, data, db):
+         and hasattr(default_manager, "get_by_natural_key")
+         and hasattr(Model, "natural_key")
+     ):
+-        natural_key = Model(**data).natural_key()
++        obj = Model(**data)
++        obj._state.db = db
++        natural_key = obj.natural_key()
+         try:
+             data[Model._meta.pk.attname] = Model._meta.pk.to_python(
+                 default_manager.db_manager(db).get_by_natural_key(*natural_key).pk
+diff --git a/tests/serializers/models/natural.py b/tests/serializers/models/natural.py
+index 1e439b34eb..2d46612eb4 100644
+--- a/tests/serializers/models/natural.py
++++ b/tests/serializers/models/natural.py
+@@ -73,3 +73,36 @@ class FKAsPKNoNaturalKey(models.Model):
+ 
+     def natural_key(self):
+         raise NotImplementedError("This method was not expected to be called.")
++
++
++class NaturalKeyAnchor2Manager(models.Manager):
++    def get_by_natural_key(self, name):
++        return self.get(name=name)
++
++
++class NaturalKeyAnchor2(models.Model):
++    name = models.CharField(max_length=100, unique=True)
++
++    objects = NaturalKeyAnchor2Manager()
++
++    def natural_key(self):
++        return (self.name,)
++
++
++class NaturalKeyThingWithFK(models.Model):
++    title = models.CharField(max_length=100)
++    anchor = models.ForeignKey(NaturalKeyAnchor2, models.CASCADE)
++
++    class Manager(models.Manager):
++        def get_by_natural_key(self, title, anchor):
++            return self.get(title=title, anchor__name=anchor)
++
++    objects = Manager()
++
++    def natural_key(self):
++        return (self.title,) + self.anchor.natural_key()
++
++    natural_key.dependencies = ["serializers.naturalkeyanchor2"]
++
++    class Meta:
++        unique_together = [["title", "anchor"]]
+diff --git a/tests/serializers/test_natural.py b/tests/serializers/test_natural.py
+index 6b6cfae6f3..9b6135cc0e 100644
+--- a/tests/serializers/test_natural.py
++++ b/tests/serializers/test_natural.py
+@@ -7,7 +7,9 @@ from .models import (
+     FKAsPKNoNaturalKey,
+     FKDataNaturalKey,
+     NaturalKeyAnchor,
++    NaturalKeyAnchor2,
+     NaturalKeyThing,
++    NaturalKeyThingWithFK,
+     NaturalPKWithDefault,
+ )
+ from .tests import register_tests
+@@ -248,6 +250,33 @@ def fk_as_pk_natural_key_not_called(self, format):
+         self.assertEqual(obj.object.pk, o1.pk)
+ 
+ 
++def natural_key_fk_dependencies_test(self, format):
++    author = NaturalKeyAnchor2.objects.using("other").create(name="Tom")
++    NaturalKeyThingWithFK.objects.using("other").create(
++        title="The Ring", anchor=author
++    )
++    serialized_data = serializers.serialize(
++        format,
++        [author, NaturalKeyThingWithFK.objects.using("other").get(title="The Ring")],
++        use_natural_foreign_keys=True,
++        use_natural_primary_keys=True,
++    )
++    NaturalKeyAnchor2.objects.using("other").all().delete()
++    NaturalKeyThingWithFK.objects.using("other").all().delete()
++    for obj in serializers.deserialize(format, serialized_data, using="other"):
++        obj.save(using="other")
++    self.assertEqual(
++        NaturalKeyThingWithFK.objects.using("other")
++        .get(title="The Ring")
++        .anchor.name,
++        "Tom",
++    )
++
++
++class NaturalKeyMultiDBTests(TestCase):
++    databases = {"default", "other"}
++
++
+ # Dynamically register tests for each serializer
+ register_tests(
+     NaturalKeySerializerTests,
+@@ -282,3 +311,9 @@ register_tests(
+     "test_%s_fk_as_pk_natural_key_not_called",
+     fk_as_pk_natural_key_not_called,
+ )
++
++register_tests(
++    NaturalKeyMultiDBTests,
++    "test_%s_natural_key_fk_dependencies",
++    natural_key_fk_dependencies_test,
++)

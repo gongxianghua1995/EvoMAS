@@ -1,0 +1,47 @@
+diff --git a/django/db/migrations/serializer.py b/django/db/migrations/serializer.py
+index e19c881cda..072a2efc14 100644
+--- a/django/db/migrations/serializer.py
++++ b/django/db/migrations/serializer.py
+@@ -273,7 +273,7 @@ class TupleSerializer(BaseSequenceSerializer):
+ class TypeSerializer(BaseSerializer):
+     def serialize(self):
+         special_cases = [
+-            (models.Model, "models.Model", []),
++            (models.Model, "models.Model", ["from django.db import models"]),
+             (type(None), 'type(None)', []),
+         ]
+         for case, string, imports in special_cases:
+diff --git a/tests/migrations/test_writer.py b/tests/migrations/test_writer.py
+index a590ff4398..6f6e23e9c5 100644
+--- a/tests/migrations/test_writer.py
++++ b/tests/migrations/test_writer.py
+@@ -658,6 +658,29 @@ class WriterTests(SimpleTestCase):
+     def test_serialize_type_none(self):
+         self.assertSerializedEqual(type(None))
+ 
++    def test_serialize_models_model(self):
++        self.assertSerializedResultEqual(
++            models.Model,
++            ('models.Model', {'from django.db import models'}),
++        )
++
++    def test_serialize_mixed_bases_import(self):
++        migration = type("Migration", (migrations.Migration,), {
++            "operations": [
++                migrations.CreateModel(
++                    name="MyModel",
++                    fields=[],
++                    bases=(custom_migration_operations.operations.TestOperation, models.Model),
++                ),
++            ],
++            "dependencies": [],
++        })
++        writer = MigrationWriter(migration)
++        output = writer.as_string()
++        self.assertIn("from django.db import migrations, models", output)
++        result = self.safe_exec(output)
++        self.assertIn("Migration", result)
++
+     def test_simple_migration(self):
+         """
+         Tests serializing a simple migration.

@@ -1,0 +1,102 @@
+diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py
+index f02199d97c..d31020896d 100644
+--- a/django/db/models/sql/compiler.py
++++ b/django/db/models/sql/compiler.py
+@@ -6,7 +6,7 @@ from itertools import chain
+ from django.core.exceptions import EmptyResultSet, FieldError
+ from django.db import DatabaseError, NotSupportedError
+ from django.db.models.constants import LOOKUP_SEP
+-from django.db.models.expressions import F, OrderBy, RawSQL, Ref, Value
++from django.db.models.expressions import Col, F, OrderBy, RawSQL, Ref, Value
+ from django.db.models.functions import Cast, Random
+ from django.db.models.query_utils import Q, select_related_descend
+ from django.db.models.sql.constants import (
+@@ -1412,13 +1412,21 @@ class SQLInsertCompiler(SQLCompiler):
+             if not self.returning_fields:
+                 return []
+             if self.connection.features.can_return_rows_from_bulk_insert and len(self.query.objs) > 1:
+-                return self.connection.ops.fetch_returned_insert_rows(cursor)
+-            if self.connection.features.can_return_columns_from_insert:
++                rows = self.connection.ops.fetch_returned_insert_rows(cursor)
++            elif self.connection.features.can_return_columns_from_insert:
+                 assert len(self.query.objs) == 1
+-                return [self.connection.ops.fetch_returned_insert_columns(cursor, self.returning_params)]
+-            return [(self.connection.ops.last_insert_id(
+-                cursor, self.query.get_meta().db_table, self.query.get_meta().pk.column
+-            ),)]
++                rows = [self.connection.ops.fetch_returned_insert_columns(cursor, self.returning_params)]
++            else:
++                rows = [(self.connection.ops.last_insert_id(
++                    cursor, self.query.get_meta().db_table, self.query.get_meta().pk.column
++                ),)]
++            converters = self.get_converters([
++                Col(self.query.get_meta().db_table, field)
++                for field in returning_fields
++            ])
++            if converters:
++                rows = list(self.apply_converters(rows, converters))
++        return rows
+ 
+ 
+ class SQLDeleteCompiler(SQLCompiler):
+diff --git a/tests/from_db_value/models.py b/tests/from_db_value/models.py
+index 58e8ec3a27..0656d2ef27 100644
+--- a/tests/from_db_value/models.py
++++ b/tests/from_db_value/models.py
+@@ -21,3 +21,19 @@ class CashField(models.DecimalField):
+ 
+ class CashModel(models.Model):
+     cash = CashField()
++
++
++class MyBigAutoField(models.BigAutoField):
++    def from_db_value(self, value, expression, connection):
++        if value is None:
++            return None
++        return Cash(value)
++
++    def get_prep_value(self, value):
++        if value is None:
++            return None
++        return int(value)
++
++
++class BigAutoModel(models.Model):
++    id = MyBigAutoField(primary_key=True)
+diff --git a/tests/from_db_value/tests.py b/tests/from_db_value/tests.py
+index ab92f37ccf..ee6e321357 100644
+--- a/tests/from_db_value/tests.py
++++ b/tests/from_db_value/tests.py
+@@ -1,8 +1,8 @@
+ from django.db import connection
+ from django.db.models import Max
+-from django.test import TestCase
++from django.test import TestCase, skipUnlessDBFeature
+ 
+-from .models import Cash, CashModel
++from .models import BigAutoModel, Cash, CashModel
+ 
+ 
+ class FromDBValueTest(TestCase):
+@@ -33,3 +33,21 @@ class FromDBValueTest(TestCase):
+     def test_connection(self):
+         instance = CashModel.objects.get()
+         self.assertEqual(instance.cash.vendor, connection.vendor)
++
++
++class InsertFromDBValueTest(TestCase):
++    def test_create(self):
++        instance = BigAutoModel.objects.create()
++        self.assertIsInstance(instance.id, Cash)
++
++    def test_save(self):
++        instance = BigAutoModel()
++        instance.save()
++        self.assertIsInstance(instance.id, Cash)
++
++    @skipUnlessDBFeature('can_return_rows_from_bulk_insert')
++    def test_bulk_create(self):
++        instances = [BigAutoModel(), BigAutoModel()]
++        BigAutoModel.objects.bulk_create(instances)
++        for instance in instances:
++            self.assertIsInstance(instance.id, Cash)

@@ -1,0 +1,67 @@
+diff --git a/CHANGES b/CHANGES
+index 9ef4dd273..c027a57fb 100644
+--- a/CHANGES
++++ b/CHANGES
+@@ -26,6 +26,7 @@ Features added
+ Bugs fixed
+ ----------
+ 
++* #8211: i18n: The translated messages in ``locale_dirs`` are now used
+ * #8085: i18n: Add support for having single text domain
+ * #8143: autodoc: AttributeError is raised when False value is passed to
+   autodoc_default_options
+diff --git a/sphinx/application.py b/sphinx/application.py
+index 385b74d8a..95d1848ae 100644
+--- a/sphinx/application.py
++++ b/sphinx/application.py
+@@ -293,7 +293,7 @@ class Sphinx:
+                 if catalog.domain == 'sphinx' and catalog.is_outdated():
+                     catalog.write_mo(self.config.language)
+ 
+-            locale_dirs = [None, path.join(package_dir, 'locale')] + list(repo.locale_dirs)
++            locale_dirs = list(repo.locale_dirs) + [None, path.join(package_dir, 'locale')]
+             self.translator, has_translation = locale.init(locale_dirs, self.config.language)
+             if has_translation or self.config.language == 'en':
+                 # "en" never needs to be translated
+diff --git a/tests/test_catalogs.py b/tests/test_catalogs.py
+index e603a5812..f28e0b537 100644
+--- a/tests/test_catalogs.py
++++ b/tests/test_catalogs.py
+@@ -11,7 +11,7 @@ import shutil
+ 
+ import pytest
+ 
+-from sphinx.testing.util import find_files
++from sphinx.testing.util import find_files, path
+ 
+ 
+ @pytest.fixture
+@@ -87,3 +87,28 @@ def test_compile_update_catalogs(app, status, warning):
+     actual = set(find_files(catalog_dir, '.mo'))
+     assert actual  # not empty
+     assert actual == expect
++
++
++@pytest.mark.sphinx(
++    'html', testroot='intl',
++    confoverrides={'language': 'da', 'locale_dirs': ['./locale'], 'numfig': True})
++def test_locale_dirs_override_builtin_messages(app, status, warning):
++    # user provided sphinx.po in locale_dirs should override the built-in
++    # messages from sphinx/locale/<language>/LC_MESSAGES/sphinx.mo
++    srcdir = path(app.srcdir)
++    locale_dir = srcdir / 'locale' / 'da' / 'LC_MESSAGES'
++    locale_dir.makedirs(exist_ok=True)
++    (locale_dir / 'sphinx.po').write_text(
++        'msgid ""\n'
++        'msgstr ""\n'
++        '"Content-Type: text/plain; charset=UTF-8\\n"\n'
++        '\n'
++        'msgid "Fig. %s"\n'
++        'msgstr "Foobar %s"\n',
++        encoding='utf-8')
++
++    app.build()
++
++    figure_html = (app.outdir / 'figure.html').read_text(encoding='utf-8')
++    assert 'Foobar 1' in figure_html
++    assert 'figur 1' not in figure_html

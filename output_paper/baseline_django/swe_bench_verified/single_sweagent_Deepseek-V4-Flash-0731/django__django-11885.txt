@@ -1,0 +1,28 @@
+diff --git a/django/db/models/deletion.py b/django/db/models/deletion.py
+index ae82d26340..bb754971bd 100644
+--- a/django/db/models/deletion.py
++++ b/django/db/models/deletion.py
+@@ -4,6 +4,7 @@ from operator import attrgetter
+ 
+ from django.db import IntegrityError, connections, transaction
+ from django.db.models import signals, sql
++from django.db.models.sql.where import OR
+ 
+ 
+ class ProtectedError(IntegrityError):
+@@ -310,7 +311,16 @@ class Collector:
+                     )
+ 
+             # fast deletes
++            fast_deletes = {}
+             for qs in self.fast_deletes:
++                model = qs.model
++                if model in fast_deletes:
++                    # Combine fast deletes for the same model into a single
++                    # query to reduce the number of round trips.
++                    fast_deletes[model].query.combine(qs.query.clone(), OR)
++                else:
++                    fast_deletes[model] = qs
++            for qs in fast_deletes.values():
+                 count = qs._raw_delete(using=self.using)
+                 deleted_counter[qs.model._meta.label] += count

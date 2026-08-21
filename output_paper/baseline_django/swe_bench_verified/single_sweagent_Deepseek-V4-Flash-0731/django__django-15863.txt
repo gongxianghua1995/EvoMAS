@@ -1,0 +1,22 @@
+diff --git a/django/template/defaultfilters.py b/django/template/defaultfilters.py
+index 7a5b28d159..c09db2b165 100644
+--- a/django/template/defaultfilters.py
++++ b/django/template/defaultfilters.py
+@@ -154,10 +154,13 @@ def floatformat(text, arg=-1):
+         input_val = repr(text)
+         d = Decimal(input_val)
+     except InvalidOperation:
+-        try:
+-            d = Decimal(str(float(text)))
+-        except (ValueError, InvalidOperation, TypeError):
+-            return ""
++        if isinstance(text, Decimal):
++            d = text
++        else:
++            try:
++                d = Decimal(str(float(text)))
++            except (ValueError, InvalidOperation, TypeError):
++                return ""
+     try:
+         p = int(arg)
+     except ValueError:

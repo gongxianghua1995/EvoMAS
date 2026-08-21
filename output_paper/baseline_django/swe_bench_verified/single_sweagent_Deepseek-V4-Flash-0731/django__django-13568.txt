@@ -1,0 +1,165 @@
+diff --git a/django/contrib/auth/checks.py b/django/contrib/auth/checks.py
+index 65fc266f7e..ee0f5bee0c 100644
+--- a/django/contrib/auth/checks.py
++++ b/django/contrib/auth/checks.py
+@@ -4,6 +4,7 @@ from types import MethodType
+ from django.apps import apps
+ from django.conf import settings
+ from django.core import checks
++from django.db.models import UniqueConstraint
+ 
+ from .management import _get_builtin_permissions
+ 
+@@ -53,28 +54,35 @@ def check_user_model(app_configs=None, **kwargs):
+ 
+     # Check that the username field is unique
+     if not cls._meta.get_field(cls.USERNAME_FIELD).unique:
+-        if (settings.AUTHENTICATION_BACKENDS ==
+-                ['django.contrib.auth.backends.ModelBackend']):
+-            errors.append(
+-                checks.Error(
+-                    "'%s.%s' must be unique because it is named as the 'USERNAME_FIELD'." % (
+-                        cls._meta.object_name, cls.USERNAME_FIELD
+-                    ),
+-                    obj=cls,
+-                    id='auth.E003',
++        unique_constraints = [
++            constraint for constraint in cls._meta.constraints
++            if isinstance(constraint, UniqueConstraint) and
++            constraint.fields == (cls.USERNAME_FIELD,) and
++            constraint.condition is None
++        ]
++        if not unique_constraints:
++            if (settings.AUTHENTICATION_BACKENDS ==
++                    ['django.contrib.auth.backends.ModelBackend']):
++                errors.append(
++                    checks.Error(
++                        "'%s.%s' must be unique because it is named as the 'USERNAME_FIELD'." % (
++                            cls._meta.object_name, cls.USERNAME_FIELD
++                        ),
++                        obj=cls,
++                        id='auth.E003',
++                    )
+                 )
+-            )
+-        else:
+-            errors.append(
+-                checks.Warning(
+-                    "'%s.%s' is named as the 'USERNAME_FIELD', but it is not unique." % (
+-                        cls._meta.object_name, cls.USERNAME_FIELD
+-                    ),
+-                    hint='Ensure that your authentication backend(s) can handle non-unique usernames.',
+-                    obj=cls,
+-                    id='auth.W004',
++            else:
++                errors.append(
++                    checks.Warning(
++                        "'%s.%s' is named as the 'USERNAME_FIELD', but it is not unique." % (
++                            cls._meta.object_name, cls.USERNAME_FIELD
++                        ),
++                        hint='Ensure that your authentication backend(s) can handle non-unique usernames.',
++                        obj=cls,
++                        id='auth.W004',
++                    )
+                 )
+-            )
+ 
+     if isinstance(cls().is_anonymous, MethodType):
+         errors.append(
+diff --git a/tests/auth_tests/test_checks.py b/tests/auth_tests/test_checks.py
+index cfaa4063f8..c65b9081f2 100644
+--- a/tests/auth_tests/test_checks.py
++++ b/tests/auth_tests/test_checks.py
+@@ -85,6 +85,92 @@ class UserModelChecksTests(SimpleTestCase):
+                 ),
+             ])
+ 
++    @override_settings(AUTH_USER_MODEL='auth_tests.CustomUserWithUniqueConstraint')
++    def test_username_with_unique_constraint(self):
++        class CustomUserWithUniqueConstraint(AbstractBaseUser):
++            username = models.CharField(max_length=30)
++            USERNAME_FIELD = 'username'
++
++            class Meta:
++                constraints = [
++                    models.UniqueConstraint(fields=['username'], name='user_username_unq'),
++                ]
++
++        errors = checks.run_checks(self.apps.get_app_configs())
++        self.assertEqual(errors, [])
++
++    @override_settings(AUTH_USER_MODEL='auth_tests.CustomUserWithPartialUniqueConstraint')
++    def test_username_with_partial_unique_constraint(self):
++        class CustomUserWithPartialUniqueConstraint(AbstractBaseUser):
++            username = models.CharField(max_length=30)
++            USERNAME_FIELD = 'username'
++
++            class Meta:
++                constraints = [
++                    models.UniqueConstraint(
++                        fields=['username'],
++                        name='user_username_unq',
++                        condition=models.Q(active=True),
++                    ),
++                ]
++
++        errors = checks.run_checks(self.apps.get_app_configs())
++        self.assertEqual(errors, [
++            checks.Error(
++                "'CustomUserWithPartialUniqueConstraint.username' must be "
++                "unique because it is named as the 'USERNAME_FIELD'.",
++                obj=CustomUserWithPartialUniqueConstraint,
++                id='auth.E003',
++            ),
++        ])
++
++    @override_settings(AUTH_USER_MODEL='auth_tests.CustomUserWithUniqueConstraintNotOnUsername')
++    def test_username_non_unique_when_constraint_on_other_field(self):
++        class CustomUserWithUniqueConstraintNotOnUsername(AbstractBaseUser):
++            username = models.CharField(max_length=30)
++            email = models.CharField(max_length=30)
++            USERNAME_FIELD = 'username'
++
++            class Meta:
++                constraints = [
++                    models.UniqueConstraint(fields=['email'], name='user_email_unq'),
++                ]
++
++        errors = checks.run_checks(self.apps.get_app_configs())
++        self.assertEqual(errors, [
++            checks.Error(
++                "'CustomUserWithUniqueConstraintNotOnUsername.username' must be "
++                "unique because it is named as the 'USERNAME_FIELD'.",
++                obj=CustomUserWithUniqueConstraintNotOnUsername,
++                id='auth.E003',
++            ),
++        ])
++
++    @override_settings(AUTH_USER_MODEL='auth_tests.CustomUserWithCompositeUniqueConstraint')
++    def test_username_non_unique_with_composite_unique_constraint(self):
++        class CustomUserWithCompositeUniqueConstraint(AbstractBaseUser):
++            username = models.CharField(max_length=30)
++            tenant = models.IntegerField()
++            USERNAME_FIELD = 'username'
++
++            class Meta:
++                constraints = [
++                    models.UniqueConstraint(
++                        fields=['username', 'tenant'],
++                        name='user_username_tenant_unq',
++                    ),
++                ]
++
++        errors = checks.run_checks(self.apps.get_app_configs())
++        self.assertEqual(errors, [
++            checks.Error(
++                "'CustomUserWithCompositeUniqueConstraint.username' must be "
++                "unique because it is named as the 'USERNAME_FIELD'.",
++                obj=CustomUserWithCompositeUniqueConstraint,
++                id='auth.E003',
++            ),
++        ])
++
+     @override_settings(AUTH_USER_MODEL='auth_tests.BadUser')
+     def test_is_anonymous_authenticated_methods(self):
+         """

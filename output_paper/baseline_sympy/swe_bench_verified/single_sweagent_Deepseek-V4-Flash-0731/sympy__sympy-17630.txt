@@ -1,0 +1,47 @@
+diff --git a/sympy/matrices/expressions/blockmatrix.py b/sympy/matrices/expressions/blockmatrix.py
+index 95302a05ca..90a602dd77 100644
+--- a/sympy/matrices/expressions/blockmatrix.py
++++ b/sympy/matrices/expressions/blockmatrix.py
+@@ -164,7 +164,17 @@ def structurally_equal(self, other):
+     def _blockmul(self, other):
+         if (isinstance(other, BlockMatrix) and
+                 self.colblocksizes == other.rowblocksizes):
+-            return BlockMatrix(self.blocks*other.blocks)
++            M = self.blocks*other.blocks
++            # Matrix multiplication of the blocks can turn zero blocks
++            # into scalar zeros (e.g. Add(ZeroMatrix, ZeroMatrix) -> 0),
++            # which BlockMatrix cannot handle. Convert them back.
++            blocks = M.tolist()
++            for i in range(self.blockshape[0]):
++                for j in range(other.blockshape[1]):
++                    if not getattr(blocks[i][j], 'is_Matrix', False):
++                        blocks[i][j] = ZeroMatrix(self.rowblocksizes[i],
++                                                  other.colblocksizes[j])
++            return BlockMatrix(blocks)
+ 
+         return self * other
+ 
+diff --git a/sympy/matrices/expressions/tests/test_blockmatrix.py b/sympy/matrices/expressions/tests/test_blockmatrix.py
+index 1e1033affc..60b923be7c 100644
+--- a/sympy/matrices/expressions/tests/test_blockmatrix.py
++++ b/sympy/matrices/expressions/tests/test_blockmatrix.py
+@@ -3,6 +3,7 @@
+     BlockMatrix, bc_dist, bc_matadd, bc_transpose, bc_inverse,
+     blockcut, reblock_2x2, deblock)
+ from sympy.matrices.expressions import (MatrixSymbol, Identity,
++        ZeroMatrix,
+         Inverse, trace, Transpose, det)
+ from sympy.matrices import (
+     Matrix, ImmutableMatrix, ImmutableSparseMatrix)
+@@ -222,3 +223,11 @@ def test_block_collapse_type():
+     assert block_collapse(Transpose(bm1)).__class__ == BlockDiagMatrix
+     assert bc_transpose(Transpose(bm1)).__class__ == BlockDiagMatrix
+     assert bc_inverse(Inverse(bm1)).__class__ == BlockDiagMatrix
++
++def test_BlockMatrix_zero_blocks():
++    a = MatrixSymbol('a', 2, 2)
++    z = ZeroMatrix(2, 2)
++    b = BlockMatrix([[a, z], [z, z]])
++    assert block_collapse(b*b) == BlockMatrix([[a**2, z], [z, z]])
++    assert block_collapse(b*b*b) == BlockMatrix([[a**3, z], [z, z]])
++    assert b._blockmul(b)._blockmul(b) == BlockMatrix([[a**3, z], [z, z]])

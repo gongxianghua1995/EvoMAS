@@ -20,6 +20,53 @@ from src.prompts.render import render_prompt
 from src.mas.interpreter import interpret_mas
 from src.meta_model.experience import ActionExperience, MemoryStore
 
+
+def _wrap_meta_model_with_step_logger(model: Any, agent_id: str):
+    """Return a callable wrapper that logs each (prompt, response) call to run.log."""
+    import time as _time
+    import asyncio
+
+    is_coro = asyncio.iscoroutinefunction(model.__call__)
+    step_counter = [0]
+
+    def _log(prompt, response, duration):
+        step_counter[0] += 1
+        step = step_counter[0]
+        p_str = str(prompt)
+        r_str = str(response)
+        if len(p_str) > 800:
+            p_str = p_str[:800] + f"\n... [truncated, total {len(p_str)} chars]"
+        if len(r_str) > 2000:
+            r_str = r_str[:2000] + f"\n... [truncated, total {len(r_str)} chars]"
+        logging.getLogger(__name__).info(
+            f"\n{'='*20} [LLM {agent_id} step {step}] ({duration:.1f}s) {'='*20}\n"
+            f"--- IN ---\n{p_str}\n"
+            f"--- OUT ---\n{r_str}\n"
+            f"{'='*60}"
+        )
+
+    class _LoggedModel:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        if is_coro:
+            async def __call__(self, prompt, *args, **kwargs):
+                start = _time.time()
+                resp = await self._inner(prompt, *args, **kwargs)
+                _log(prompt, resp, _time.time() - start)
+                return resp
+        else:
+            def __call__(self, prompt, *args, **kwargs):
+                start = _time.time()
+                resp = self._inner(prompt, *args, **kwargs)
+                _log(prompt, resp, _time.time() - start)
+                return resp
+
+    return _LoggedModel(model)
+
 logger = logging.getLogger(__name__)
 
 
@@ -139,6 +186,9 @@ class MetaModel:
             temperature=temperature,
             max_tokens=max_tokens
         )
+
+        # Log each meta-model LLM call to run.log
+        self.model = _wrap_meta_model_with_step_logger(self.model, "meta_model")
 
         # Load prompt templates
         self.prompt_registry = PromptRegistry()

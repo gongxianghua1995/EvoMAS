@@ -1,0 +1,185 @@
+diff --git a/django/forms/models.py b/django/forms/models.py
+index 7effb202e3..2baa7c1e1e 100644
+--- a/django/forms/models.py
++++ b/django/forms/models.py
+@@ -572,11 +572,18 @@ class BaseModelFormSet(BaseFormSet):
+     # Set of fields that must be unique among forms of this set.
+     unique_fields = set()
+ 
++    edit_only = False
++
+     def __init__(self, data=None, files=None, auto_id='id_%s', prefix=None,
+-                 queryset=None, *, initial=None, **kwargs):
++                 queryset=None, *, initial=None, edit_only=None, **kwargs):
+         self.queryset = queryset
+         self.initial_extra = initial
++        if edit_only is None:
++            edit_only = getattr(self, 'edit_only', False)
++        self.edit_only = edit_only
+         super().__init__(**{'data': data, 'files': files, 'auto_id': auto_id, 'prefix': prefix, **kwargs})
++        if self.edit_only:
++            self.extra = 0
+ 
+     def initial_form_count(self):
+         """Return the number of forms that are required in this FormSet."""
+@@ -813,6 +820,8 @@ class BaseModelFormSet(BaseFormSet):
+ 
+     def save_new_objects(self, commit=True):
+         self.new_objects = []
++        if self.edit_only:
++            return self.new_objects
+         for form in self.extra_forms:
+             if not form.has_changed():
+                 continue
+@@ -875,7 +884,8 @@ def modelformset_factory(model, form=ModelForm, formfield_callback=None,
+                          widgets=None, validate_max=False, localized_fields=None,
+                          labels=None, help_texts=None, error_messages=None,
+                          min_num=None, validate_min=False, field_classes=None,
+-                         absolute_max=None, can_delete_extra=True, renderer=None):
++                         absolute_max=None, can_delete_extra=True, renderer=None,
++                         edit_only=False):
+     """Return a FormSet class for the given Django model class."""
+     meta = getattr(form, 'Meta', None)
+     if (getattr(meta, 'fields', fields) is None and
+@@ -896,6 +906,7 @@ def modelformset_factory(model, form=ModelForm, formfield_callback=None,
+                               absolute_max=absolute_max, can_delete_extra=can_delete_extra,
+                               renderer=renderer)
+     FormSet.model = model
++    FormSet.edit_only = edit_only
+     return FormSet
+ 
+ 
+@@ -1076,7 +1087,8 @@ def inlineformset_factory(parent_model, model, form=ModelForm,
+                           widgets=None, validate_max=False, localized_fields=None,
+                           labels=None, help_texts=None, error_messages=None,
+                           min_num=None, validate_min=False, field_classes=None,
+-                          absolute_max=None, can_delete_extra=True, renderer=None):
++                          absolute_max=None, can_delete_extra=True, renderer=None,
++                          edit_only=False):
+     """
+     Return an ``InlineFormSet`` for the given kwargs.
+ 
+@@ -1109,6 +1121,7 @@ def inlineformset_factory(parent_model, model, form=ModelForm,
+         'absolute_max': absolute_max,
+         'can_delete_extra': can_delete_extra,
+         'renderer': renderer,
++        'edit_only': edit_only,
+     }
+     FormSet = modelformset_factory(model, **kwargs)
+     FormSet.fk = fk
+diff --git a/tests/model_formsets/tests.py b/tests/model_formsets/tests.py
+index bb1a8a8a5e..fd8ab0a468 100644
+--- a/tests/model_formsets/tests.py
++++ b/tests/model_formsets/tests.py
+@@ -411,6 +411,111 @@ class ModelFormsetTest(TestCase):
+         formset = AuthorFormSet(queryset=qs)
+         self.assertSequenceEqual(formset.get_queryset(), [a1, a2, a3])
+ 
++    def test_edit_only(self):
++        # Test the edit_only parameter which disallows the creation of new
++        # objects, while still allowing existing objects to be edited.
++        a1 = Author.objects.create(name='Charles Baudelaire')
++        a2 = Author.objects.create(name='Paul Verlaine')
++
++        AuthorFormSet = modelformset_factory(
++            Author, fields="__all__", edit_only=True, extra=3,
++        )
++        formset = AuthorFormSet(queryset=Author.objects.all())
++        # ``extra`` is ignored when ``edit_only`` is True.
++        self.assertEqual(len(formset.forms), 2)
++        self.assertEqual(len(formset.extra_forms), 0)
++
++        # Existing objects can be edited.
++        data = {
++            'form-TOTAL_FORMS': '2',
++            'form-INITIAL_FORMS': '2',
++            'form-MIN_NUM_FORMS': '0',
++            'form-MAX_NUM_FORMS': '1000',
++            'form-0-id': str(a1.pk),
++            'form-0-name': 'Charles Baudelaire (edited)',
++            'form-1-id': str(a2.pk),
++            'form-1-name': 'Paul Verlaine',
++        }
++        formset = AuthorFormSet(data)
++        self.assertTrue(formset.is_valid())
++        formset.save()
++        a1.refresh_from_db()
++        self.assertEqual(a1.name, 'Charles Baudelaire (edited)')
++        self.assertEqual(Author.objects.count(), 2)
++
++    def test_edit_only_does_not_create_new_objects(self):
++        # Sending data that references objects by pk but tampers with the
++        # INITIAL_FORMS management field must not create new objects.
++        a1 = Author.objects.create(name='Charles Baudelaire')
++        a2 = Author.objects.create(name='Paul Verlaine')
++
++        AuthorFormSet = modelformset_factory(
++            Author, fields="__all__", edit_only=True, extra=0, max_num=2,
++        )
++        data = {
++            'form-TOTAL_FORMS': '2',
++            'form-INITIAL_FORMS': '1',
++            'form-MIN_NUM_FORMS': '0',
++            'form-MAX_NUM_FORMS': '1000',
++            'form-0-id': str(a1.pk),
++            'form-0-name': 'Charles Baudelaire',
++            'form-1-id': str(a2.pk),
++            'form-1-name': 'Paul Verlaine',
++        }
++        formset = AuthorFormSet(data)
++        self.assertTrue(formset.is_valid())
++        saved = formset.save()
++        self.assertEqual(saved, [])
++        self.assertEqual(formset.new_objects, [])
++        self.assertEqual(Author.objects.count(), 2)
++
++        # An extra form with data for a new object doesn't create anything
++        # either.
++        data = {
++            'form-TOTAL_FORMS': '3',
++            'form-INITIAL_FORMS': '2',
++            'form-MIN_NUM_FORMS': '0',
++            'form-MAX_NUM_FORMS': '1000',
++            'form-0-id': str(a1.pk),
++            'form-0-name': 'Charles Baudelaire',
++            'form-1-id': str(a2.pk),
++            'form-1-name': 'Paul Verlaine',
++            'form-2-id': '',
++            'form-2-name': 'Walt Whitman',
++        }
++        formset = AuthorFormSet(data)
++        formset.save()
++        self.assertEqual(formset.new_objects, [])
++        self.assertEqual(Author.objects.count(), 2)
++
++    def test_edit_only_inline_formset(self):
++        a1 = Author.objects.create(name='Charles Baudelaire')
++        book = Book.objects.create(author=a1, title='Les Fleurs du mal')
++
++        BookFormSet = inlineformset_factory(
++            Author, Book, fields="__all__", edit_only=True, extra=1,
++        )
++        formset = BookFormSet(instance=a1)
++        self.assertEqual(len(formset.forms), 1)
++        self.assertEqual(len(formset.extra_forms), 0)
++
++        data = {
++            'book_set-TOTAL_FORMS': '2',
++            'book_set-INITIAL_FORMS': '1',
++            'book_set-MIN_NUM_FORMS': '0',
++            'book_set-MAX_NUM_FORMS': '1000',
++            'book_set-0-id': str(book.pk),
++            'book_set-0-title': 'Les Fleurs du mal (edited)',
++            'book_set-1-id': '',
++            'book_set-1-title': 'New Book',
++        }
++        formset = BookFormSet(instance=a1, data=data)
++        self.assertTrue(formset.is_valid())
++        formset.save()
++        book.refresh_from_db()
++        self.assertEqual(book.title, 'Les Fleurs du mal (edited)')
++        self.assertEqual(Book.objects.count(), 1)
++
+     def test_min_num(self):
+         # Test the behavior of min_num with model formsets. It should be
+         # added to extra.

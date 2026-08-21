@@ -1,0 +1,52 @@
+diff --git a/django/forms/models.py b/django/forms/models.py
+index 3fa04b821f..3378a5ab82 100644
+--- a/django/forms/models.py
++++ b/django/forms/models.py
+@@ -1171,17 +1171,23 @@ class BaseInlineFormSet(BaseModelFormSet):
+             kwargs["to_field"] = self.fk.remote_field.field_name
+ 
+         # If we're adding a new object, ignore a parent's auto-generated key
+-        # as it will be regenerated on the save request.
++        # as it will be regenerated on the save request. Only the form field's
++        # initial value is cleared; the parent instance must keep its default
++        # value so that it isn't saved as NULL.
++        ignore_parent_key_initial = False
+         if self.instance._state.adding:
+             if kwargs.get("to_field") is not None:
+                 to_field = self.instance._meta.get_field(kwargs["to_field"])
+             else:
+                 to_field = self.instance._meta.pk
+             if to_field.has_default():
+-                setattr(self.instance, to_field.attname, None)
++                ignore_parent_key_initial = True
+ 
+         form.fields[name] = InlineForeignKeyField(self.instance, **kwargs)
+ 
++        if ignore_parent_key_initial:
++            form.fields[name].initial = None
++
+     def get_unique_error_message(self, unique_check):
+         unique_check = [field for field in unique_check if field != self.fk.name]
+         return super().get_unique_error_message(unique_check)
+diff --git a/tests/model_formsets/test_uuid.py b/tests/model_formsets/test_uuid.py
+index 2097bde82b..0f6bc236ed 100644
+--- a/tests/model_formsets/test_uuid.py
++++ b/tests/model_formsets/test_uuid.py
+@@ -91,3 +91,17 @@ class InlineFormsetTests(TestCase):
+         )
+         formset = FormSet()
+         self.assertIsNone(formset.forms[0].fields["parent"].initial)
++
++    def test_inlineformset_factory_preserves_default_pk_value(self):
++        # A parent's default value (e.g. UUID) must not be cleared when the
++        # inline formset is constructed/validated, otherwise saving the parent
++        # in the admin would attempt to insert NULL for a non-auto field.
++        FormSet = inlineformset_factory(
++            ParentWithUUIDAlternateKey, ChildRelatedViaAK, fields="__all__"
++        )
++        parent = ParentWithUUIDAlternateKey(name="Parent")
++        formset = FormSet(instance=parent)
++        # Constructing the forms used to mutate the parent instance.
++        formset.forms
++        self.assertIsNotNone(parent.uuid)
++        self.assertIsNone(formset.forms[0].fields["parent"].initial)

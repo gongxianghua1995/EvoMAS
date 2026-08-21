@@ -1,0 +1,62 @@
+diff --git a/django/db/models/aggregates.py b/django/db/models/aggregates.py
+index da4ff928aa..3effaa7533 100644
+--- a/django/db/models/aggregates.py
++++ b/django/db/models/aggregates.py
+@@ -99,6 +99,7 @@ class Aggregate(Func):
+ class Avg(FixDurationInputMixin, NumericOutputFieldMixin, Aggregate):
+     function = 'AVG'
+     name = 'Avg'
++    allow_distinct = True
+ 
+ 
+ class Count(Aggregate):
+@@ -121,11 +122,13 @@ class Count(Aggregate):
+ class Max(Aggregate):
+     function = 'MAX'
+     name = 'Max'
++    allow_distinct = True
+ 
+ 
+ class Min(Aggregate):
+     function = 'MIN'
+     name = 'Min'
++    allow_distinct = True
+ 
+ 
+ class StdDev(NumericOutputFieldMixin, Aggregate):
+@@ -142,6 +145,7 @@ class StdDev(NumericOutputFieldMixin, Aggregate):
+ class Sum(FixDurationInputMixin, Aggregate):
+     function = 'SUM'
+     name = 'Sum'
++    allow_distinct = True
+ 
+ 
+ class Variance(NumericOutputFieldMixin, Aggregate):
+diff --git a/tests/aggregation/tests.py b/tests/aggregation/tests.py
+index bd6ecf699c..bb09521628 100644
+--- a/tests/aggregation/tests.py
++++ b/tests/aggregation/tests.py
+@@ -492,6 +492,23 @@ class AggregateTestCase(TestCase):
+         age_sum = distinct_authors.aggregate(Sum('age'))
+         self.assertEqual(age_sum['age__sum'], 103)
+ 
++    def test_distinct_aggregate(self):
++        # Aggregates other than Count allow distinct=True (#29147).
++        self.assertEqual(
++            Book.objects.aggregate(
++                avg=Avg('rating', distinct=True),
++                sum=Sum('rating', distinct=True),
++                max=Max('rating', distinct=True),
++                min=Min('rating', distinct=True),
++            ),
++            {
++                'avg': 4.125,
++                'sum': 16.5,
++                'max': 5.0,
++                'min': 3.0,
++            },
++        )
++
+     def test_filtering(self):
+         p = Publisher.objects.create(name='Expensive Publisher', num_awards=0)
+         Book.objects.create(

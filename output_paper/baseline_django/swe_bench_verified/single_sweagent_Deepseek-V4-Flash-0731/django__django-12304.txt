@@ -1,0 +1,22 @@
+diff --git a/django/db/models/enums.py b/django/db/models/enums.py
+index f48143ddaf..22da756e23 100644
+--- a/django/db/models/enums.py
++++ b/django/db/models/enums.py
+@@ -31,6 +31,9 @@ class ChoicesMeta(enum.EnumMeta):
+         # that is passed in as "self" as the value to use when looking up the
+         # label in the choices.
+         cls.label = property(lambda self: cls._value2label_map_.get(self.value))
++        # Do not call the Choices class in templates (it requires arguments as
++        # an enum class is callable).
++        cls.do_not_call_in_templates = True
+         return enum.unique(cls)
+ 
+     def __contains__(cls, member):
+@@ -61,6 +64,7 @@ class ChoicesMeta(enum.EnumMeta):
+ class Choices(enum.Enum, metaclass=ChoicesMeta):
+     """Class for creating enumerated choices."""
+ 
++
+     def __str__(self):
+         """
+         Use value when cast to str, so that Choices set as model instance

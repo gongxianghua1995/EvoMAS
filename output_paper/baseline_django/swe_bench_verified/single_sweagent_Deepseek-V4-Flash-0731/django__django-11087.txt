@@ -1,0 +1,77 @@
+diff --git a/django/db/models/deletion.py b/django/db/models/deletion.py
+index 3a462f1c4c..3f2b354a47 100644
+--- a/django/db/models/deletion.py
++++ b/django/db/models/deletion.py
+@@ -135,9 +135,7 @@ class Collector:
+             model = objs.model
+         else:
+             return False
+-        if (signals.pre_delete.has_listeners(model) or
+-                signals.post_delete.has_listeners(model) or
+-                signals.m2m_changed.has_listeners(model)):
++        if self._has_signal_listeners(model):
+             return False
+         # The use of from_field comes from the need to avoid cascade back to
+         # parent when parent delete is cascading to child.
+@@ -166,6 +164,34 @@ class Collector:
+         else:
+             return [objs]
+ 
++    def _has_signal_listeners(self, model):
++        return (
++            signals.pre_delete.has_listeners(model) or
++            signals.post_delete.has_listeners(model) or
++            signals.m2m_changed.has_listeners(model)
++        )
++
++    def _deletion_fields(self, model):
++        """
++        Return the names of the fields that need to be fetched on instances
++        of `model` to perform a deletion without fetching non-required fields
++        or triggering extra queries.
++        """
++        opts = model._meta
++        if self._has_signal_listeners(model) or opts.parents:
++            # Signal listeners may access any field of the deleted instances
++            # and parent links require all (inherited) fields to be loaded to
++            # reconstruct parent instances without extra queries.
++            return [field.attname for field in opts.concrete_fields]
++        fields = {opts.pk.attname}
++        # Fields referenced by the relations that will be traversed during the
++        # deletion must also be loaded to build the filters of the related
++        # objects queries (e.g. when a relation uses a non-pk to_field).
++        for related in get_candidate_relations_to_delete(opts):
++            if related.field.remote_field.on_delete != DO_NOTHING:
++                fields.add(related.field.target_field.attname)
++        return list(fields)
++
+     def collect(self, objs, source=None, nullable=False, collect_related=True,
+                 source_attr=None, reverse_dependency=False, keep_parents=False):
+         """
+@@ -188,6 +214,10 @@ class Collector:
+         if self.can_fast_delete(objs):
+             self.fast_deletes.append(objs)
+             return
++        if isinstance(objs, QuerySet) and not objs.query.select_related:
++            # Only fetch the fields required for deletion to avoid fetching
++            # non-required fields (which may, for example, not be decodable).
++            objs = objs.only(*self._deletion_fields(objs.model))
+         new_objs = self.add(objs, source, nullable,
+                             reverse_dependency=reverse_dependency)
+         if not new_objs:
+@@ -231,10 +261,14 @@ class Collector:
+     def related_objects(self, related, objs):
+         """
+         Get a QuerySet of objects related to `objs` via the relation `related`.
++
++        Only the fields required for the deletion are fetched to avoid
++        unnecessary queries and to avoid fetching non-required fields that may
++        contain data that cannot be decoded.
+         """
+         return related.related_model._base_manager.using(self.using).filter(
+             **{"%s__in" % related.field.name: objs}
+-        )
++        ).only(*self._deletion_fields(related.related_model))
+ 
+     def instances_with_model(self):
+         for model, instances in self.data.items():

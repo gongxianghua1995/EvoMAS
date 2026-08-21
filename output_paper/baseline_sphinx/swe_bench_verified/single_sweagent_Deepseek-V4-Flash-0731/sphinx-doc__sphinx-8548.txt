@@ -1,0 +1,36 @@
+diff --git a/tests/roots/test-ext-autodoc/target/inheritance.py b/tests/roots/test-ext-autodoc/target/inheritance.py
+index ffac84bb6..7934b22b6 100644
+--- a/tests/roots/test-ext-autodoc/target/inheritance.py
++++ b/tests/roots/test-ext-autodoc/target/inheritance.py
+@@ -15,3 +15,12 @@ class Derived(Base):
+     def inheritedmeth(self):
+         # no docstring here
+         pass
++
++
++class Base2(object):
++    #: A base attribute.
++    inheritedattr = True
++
++
++class Derived2(Base2):
++    pass
+diff --git a/tests/test_repro_inherited_attr.py b/tests/test_repro_inherited_attr.py
+new file mode 100644
+index 000000000..1d6bb850a
+--- /dev/null
++++ b/tests/test_repro_inherited_attr.py
+@@ -0,0 +1,13 @@
++import pytest
++from tests.test_ext_autodoc import do_autodoc
++
++
++@pytest.mark.sphinx('html', testroot='ext-autodoc')
++def test_repro_inherited_attrs(app):
++    options = {"members": None,
++               "inherited-members": None,
++               "undoc-members": None}
++    actual = do_autodoc(app, 'class', 'target.inheritance.Derived2', options)
++    for line in actual:
++        print(repr(line))
++    assert '   .. py:attribute:: Derived2.inheritedattr' in actual

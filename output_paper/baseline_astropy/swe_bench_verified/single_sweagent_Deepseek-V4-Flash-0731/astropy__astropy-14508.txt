@@ -1,0 +1,69 @@
+diff --git a/astropy/io/fits/card.py b/astropy/io/fits/card.py
+index 118bfced89..2fc62e49dd 100644
+--- a/astropy/io/fits/card.py
++++ b/astropy/io/fits/card.py
+@@ -1299,14 +1299,19 @@ def _format_value(value):
+ 
+ def _format_float(value):
+     """Format a floating number to make sure it gets the decimal point."""
+-    value_str = f"{value:.16G}"
+-    if "." not in value_str and "E" not in value_str:
++    # Use Python's default string representation of floats, which uses the
++    # shortest string that round-trips to the same value (see gh-5449), rather
++    # than one with a fixed number of significant digits, which can produce
++    # unnecessarily long representations (e.g. 0.009124999999999999 instead of
++    # 0.009125).
++    value_str = str(value)
++    if "." not in value_str and "e" not in value_str.lower():
+         value_str += ".0"
+-    elif "E" in value_str:
++    elif "e" in value_str.lower():
+         # On some Windows builds of Python (and possibly other platforms?) the
+         # exponent is zero-padded out to, it seems, three digits.  Normalize
+         # the format to pad only to two digits.
+-        significand, exponent = value_str.split("E")
++        significand, exponent = value_str.split("e")
+         if exponent[0] in ("+", "-"):
+             sign = exponent[0]
+             exponent = exponent[1:]
+diff --git a/astropy/io/fits/tests/test_header.py b/astropy/io/fits/tests/test_header.py
+index a8f4e1160f..e20996fe79 100644
+--- a/astropy/io/fits/tests/test_header.py
++++ b/astropy/io/fits/tests/test_header.py
+@@ -137,6 +137,37 @@ class TestHeaderFunctions(FitsTestCase):
+         ):
+             assert str(c) == _pad("FLOATNUM= -4.6737463674763E+32")
+ 
++    def test_float_format_uses_shortest_representation(self):
++        """
++        Regression test for the card formatting using the shortest
++        round-trip representation of a float, rather than a fixed
++        ``.16G`` format which can unnecessarily expand values (e.g.
++        0.009125 -> 0.009124999999999999) and truncate comments.
++        """
++        value = 0.009125
++        comment = "[m] radius arround actuator to avoid"
++        c = fits.Card("ESO IFM CL RADIUS", value, comment)
++        assert c.value == value
++        assert c.comment == comment
++        assert str(c) == _pad(
++            "HIERARCH ESO IFM CL RADIUS = 0.009125 / "
++            "[m] radius arround actuator to avoid"
++        )
++
++    def test_float_format_round_trips(self):
++        """
++        The formatted float value should round-trip back to the original
++        float, including for values at the limits of floating point
++        precision (see the formulation below).
++        """
++        for exp in (-60, 0, 60):
++            value = (1 - 2**-53) * 2**exp
++            c = fits.Card("TEST", value)
++            # The value written to the card image should parse back to the
++            # exact same float.
++            parsed = fits.Card.fromstring(str(c)).value
++            assert parsed == value
++
+     def test_complex_value_card(self):
+         """Test Card constructor with complex value"""

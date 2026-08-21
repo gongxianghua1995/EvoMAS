@@ -1,0 +1,42 @@
+diff --git a/sphinx/pycode/ast.py b/sphinx/pycode/ast.py
+index f541ec0a9..5c873aac2 100644
+--- a/sphinx/pycode/ast.py
++++ b/sphinx/pycode/ast.py
+@@ -202,9 +202,13 @@ class _UnparseVisitor(ast.NodeVisitor):
+ 
+         if is_simple_tuple(node.slice):
+             elts = ", ".join(self.visit(e) for e in node.slice.elts)  # type: ignore
++            if len(node.slice.elts) == 1:  # type: ignore
++                elts += ","
+             return "%s[%s]" % (self.visit(node.value), elts)
+         elif isinstance(node.slice, ast.Index) and is_simple_tuple(node.slice.value):
+             elts = ", ".join(self.visit(e) for e in node.slice.value.elts)  # type: ignore
++            if len(node.slice.value.elts) == 1:
++                elts += ","
+             return "%s[%s]" % (self.visit(node.value), elts)
+         else:
+             return "%s[%s]" % (self.visit(node.value), self.visit(node.slice))
+@@ -214,7 +218,10 @@ class _UnparseVisitor(ast.NodeVisitor):
+ 
+     def visit_Tuple(self, node: ast.Tuple) -> str:
+         if node.elts:
+-            return "(" + ", ".join(self.visit(e) for e in node.elts) + ")"
++            elts = ", ".join(self.visit(e) for e in node.elts)
++            if len(node.elts) == 1:
++                return "(%s,)" % elts
++            return "(" + elts + ")"
+         else:
+             return "()"
+ 
+diff --git a/tests/test_pycode_ast.py b/tests/test_pycode_ast.py
+index e80062351..81f8f66a2 100644
+--- a/tests/test_pycode_ast.py
++++ b/tests/test_pycode_ast.py
+@@ -55,6 +55,7 @@ from sphinx.pycode import ast
+     ("- a", "- a"),                             # USub
+     ("(1, 2, 3)", "(1, 2, 3)"),                   # Tuple
+     ("()", "()"),                               # Tuple (empty)
++    ("(1,)", "(1,)"),                           # Tuple (single element)
+ ])
+ def test_unparse(source, expected):
+     module = ast.parse(source)

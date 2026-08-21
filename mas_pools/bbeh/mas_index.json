@@ -405,11 +405,11 @@
         "timestamp": "2026-04-21T15:46:53.888027"
       }
     ],
-    "total_queries": 15,
-    "total_wins": 15,
-    "avg_accuracy": 1.0666666666666667,
+    "total_queries": 18,
+    "total_wins": 18,
+    "avg_accuracy": 0.8888888888888888,
     "avg_tokens": 0,
-    "avg_time_seconds": 586.1554759661357,
+    "avg_time_seconds": 488.4628966384464,
     "source": "seed",
     "created_at": "unknown"
   },

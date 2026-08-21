@@ -1,0 +1,64 @@
+diff --git a/django/db/models/query.py b/django/db/models/query.py
+index b48d0df9c0..85cd8311a7 100644
+--- a/django/db/models/query.py
++++ b/django/db/models/query.py
+@@ -210,6 +210,8 @@ class QuerySet:
+ 
+     @query.setter
+     def query(self, value):
++        if value.values_select:
++            self._iterable_class = ValuesIterable
+         self._query = value
+ 
+     def as_manager(cls):
+diff --git a/docs/ref/models/querysets.txt b/docs/ref/models/querysets.txt
+index 228e2cf736..29fb5af554 100644
+--- a/docs/ref/models/querysets.txt
++++ b/docs/ref/models/querysets.txt
+@@ -106,6 +106,13 @@ the query construction and is not part of the public API. However, it is safe
+ (and fully supported) to pickle and unpickle the attribute's contents as
+ described here.
+ 
++If you only pickle and unpickle the ``query`` attribute from a queryset that
++used :meth:`~django.db.models.QuerySet.values_list`, the iterable class used
++to yield results (e.g. ``ValuesListIterable``, ``FlatValuesListIterable``, or
++``NamedValuesListIterable``) is not preserved. Such a restored queryset
++behaves like a :meth:`~django.db.models.QuerySet.values` queryset and yields
++dictionaries rather than tuples, single values, or namedtuples.
++
+ .. admonition:: You can't share pickles between versions
+ 
+     Pickles of ``QuerySets`` are only valid for the version of Django that
+diff --git a/tests/queryset_pickle/tests.py b/tests/queryset_pickle/tests.py
+index a58e45caed..3df203c1f2 100644
+--- a/tests/queryset_pickle/tests.py
++++ b/tests/queryset_pickle/tests.py
+@@ -3,6 +3,8 @@ import pickle
+ 
+ import django
+ from django.db import models
++from django.db.models import Count
++from django.db.models.query import ValuesIterable
+ from django.test import TestCase
+ 
+ from .models import Container, Event, Group, Happening, M2MModel, MyEvent
+@@ -118,6 +120,19 @@ class PickleabilityTestCase(TestCase):
+             Event.objects.select_related('group').order_by('title').values_list('title', 'group__name')
+         )
+ 
++    def test_pickle_query_values(self):
++        qs = Happening.objects.values('name').order_by('id')
++        qs2 = Happening.objects.all()
++        qs2.query = pickle.loads(pickle.dumps(qs.query))
++        self.assertIs(qs2._iterable_class, ValuesIterable)
++        self.assertEqual(list(qs2), list(qs))
++
++    def test_pickle_query_annotate_values(self):
++        qs = Group.objects.annotate(total_events=Count('event')).values('name', 'total_events').order_by('name')
++        qs2 = Group.objects.all()
++        qs2.query = pickle.loads(pickle.dumps(qs.query))
++        self.assertEqual(list(qs2), list(qs))
++
+     def test_pickle_prefetch_related_idempotence(self):
+         g = Group.objects.create(name='foo')
+         groups = Group.objects.prefetch_related('event_set')

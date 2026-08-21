@@ -1,0 +1,44 @@
+diff --git a/requests/models.py b/requests/models.py
+index f82f56a3..c0fc2133 100644
+--- a/requests/models.py
++++ b/requests/models.py
+@@ -308,6 +308,11 @@ class PreparedRequest(RequestEncodingMixin, RequestHooksMixin):
+         self.method = method
+         if self.method is not None:
+             self.method = self.method.upper()
++            # Ensure that the method is a native string. On Python 2, a
++            # unicode method (e.g. ``u'POST'``) would otherwise remain
++            # unicode and later cause a UnicodeDecodeError in httplib.
++            if isinstance(self.method, str) and not isinstance(self.method, builtin_str):
++                self.method = self.method.encode('ascii')
+ 
+     def prepare_url(self, url, params):
+         """Prepares the given HTTP URL."""
+diff --git a/test_requests.py b/test_requests.py
+index a593db30..d0dab0f0 100755
+--- a/test_requests.py
++++ b/test_requests.py
+@@ -13,7 +13,7 @@ import requests
+ import pytest
+ from requests.auth import HTTPDigestAuth
+ from requests.adapters import HTTPAdapter
+-from requests.compat import str, cookielib, getproxies, urljoin, urlparse
++from requests.compat import str, cookielib, getproxies, urljoin, urlparse, builtin_str
+ from requests.cookies import cookiejar_from_dict
+ from requests.exceptions import InvalidURL, MissingSchema
+ from requests.structures import CaseInsensitiveDict
+@@ -423,6 +423,14 @@ class RequestsTestCase(unittest.TestCase):
+                           files={'file': ('test_requests.py', open(__file__, 'rb'))})
+         assert r.status_code == 200
+ 
++    def test_unicode_method(self):
++        # A unicode method name should be normalized to a native string so it
++        # does not cause a UnicodeDecodeError in httplib (Python 2).
++        r = requests.Request(method=u'POST', url=httpbin('post'))
++        prep = r.prepare()
++        assert prep.method == 'POST'
++        assert isinstance(prep.method, builtin_str)
++
+     def test_unicode_multipart_post_fieldnames(self):
+         filename = os.path.splitext(__file__)[0] + '.py'
+         r = requests.Request(method='POST',

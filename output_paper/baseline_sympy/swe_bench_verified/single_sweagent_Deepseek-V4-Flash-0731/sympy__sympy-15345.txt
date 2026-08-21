@@ -1,0 +1,35 @@
+diff --git a/sympy/printing/mathematica.py b/sympy/printing/mathematica.py
+index ea7e3a2d94..5f248c3aad 100644
+--- a/sympy/printing/mathematica.py
++++ b/sympy/printing/mathematica.py
+@@ -101,6 +101,12 @@ def _print_Function(self, expr):
+                     return "%s[%s]" % (mfunc, self.stringify(expr.args, ", "))
+         return expr.func.__name__ + "[%s]" % self.stringify(expr.args, ", ")
+ 
++    def _print_Max(self, expr):
++        return "Max[%s]" % self.stringify(expr.args, ", ")
++
++    def _print_Min(self, expr):
++        return "Min[%s]" % self.stringify(expr.args, ", ")
++
+     def _print_Integral(self, expr):
+         if len(expr.variables) == 1 and not expr.limits[0][1:]:
+             args = [expr.args[0], expr.variables[0]]
+diff --git a/sympy/printing/tests/test_mathematica.py b/sympy/printing/tests/test_mathematica.py
+index dd636d0623..578e3335f6 100644
+--- a/sympy/printing/tests/test_mathematica.py
++++ b/sympy/printing/tests/test_mathematica.py
+@@ -66,6 +66,13 @@ def test_containers():
+     assert mcode(Tuple(*[1, 2, 3])) == "{1, 2, 3}"
+ 
+ 
++def test_Max_Min():
++    from sympy import Max, Min
++    assert mcode(Max(x, 2)) == "Max[2, x]"
++    assert mcode(Min(x, 2)) == "Min[2, x]"
++    assert mcode(Max(x, y, 2)) == "Max[2, x, y]"
++
++
+ def test_Integral():
+     assert mcode(Integral(sin(sin(x)), x)) == "Hold[Integrate[Sin[Sin[x]], x]]"
+     assert mcode(Integral(exp(-x**2 - y**2),

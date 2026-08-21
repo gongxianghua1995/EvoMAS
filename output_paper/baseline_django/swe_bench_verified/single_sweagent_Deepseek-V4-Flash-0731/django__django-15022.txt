@@ -1,0 +1,84 @@
+diff --git a/django/contrib/admin/options.py b/django/contrib/admin/options.py
+index 66f3396a6b..68a539f2d2 100644
+--- a/django/contrib/admin/options.py
++++ b/django/contrib/admin/options.py
+@@ -1031,18 +1031,35 @@ class ModelAdmin(BaseModelAdmin):
+         if search_fields and search_term:
+             orm_lookups = [construct_search(str(search_field))
+                            for search_field in search_fields]
+-            for bit in smart_split(search_term):
+-                if bit.startswith(('"', "'")) and bit[0] == bit[-1]:
+-                    bit = unescape_string_literal(bit)
+-                or_queries = models.Q(
+-                    *((orm_lookup, bit) for orm_lookup in orm_lookups),
+-                    _connector=models.Q.OR,
+-                )
+-                queryset = queryset.filter(or_queries)
+-            may_have_duplicates |= any(
++            may_have_duplicates = any(
+                 lookup_spawns_duplicates(self.opts, search_spec)
+                 for search_spec in orm_lookups
+             )
++            if may_have_duplicates:
++                # Apply each search term in a separate filter so that
++                # multi-valued relations (e.g. many-to-many) can match
++                # different related objects for each term.
++                for bit in smart_split(search_term):
++                    if bit.startswith(('"', "'")) and bit[0] == bit[-1]:
++                        bit = unescape_string_literal(bit)
++                    or_queries = models.Q(
++                        *((orm_lookup, bit) for orm_lookup in orm_lookups),
++                        _connector=models.Q.OR,
++                    )
++                    queryset = queryset.filter(or_queries)
++            else:
++                # Combine all search terms into a single filter to avoid
++                # creating an unnecessary join for each term when searching
++                # across single-valued relations (e.g. foreign keys).
++                or_queries = []
++                for bit in smart_split(search_term):
++                    if bit.startswith(('"', "'")) and bit[0] == bit[-1]:
++                        bit = unescape_string_literal(bit)
++                    or_queries.append(models.Q(
++                        *((orm_lookup, bit) for orm_lookup in orm_lookups),
++                        _connector=models.Q.OR,
++                    ))
++                queryset = queryset.filter(*or_queries)
+         return queryset, may_have_duplicates
+ 
+     def get_preserved_filters(self, request):
+diff --git a/django/contrib/admin/utils.py b/django/contrib/admin/utils.py
+index 42d0d96ea6..1bd33a61fb 100644
+--- a/django/contrib/admin/utils.py
++++ b/django/contrib/admin/utils.py
+@@ -51,6 +51,30 @@ def lookup_spawns_duplicates(opts, lookup_path):
+     return False
+ 
+ 
++
++
++def lookup_spawns_m2m(opts, lookup_path):
++    """
++    Return True if the given lookup path includes a many-to-many relation.
++    """
++    lookup_fields = lookup_path.split(LOOKUP_SEP)
++    # Go through the fields (following all relations) and look for an m2m.
++    for field_name in lookup_fields:
++        if field_name == 'pk':
++            field_name = opts.pk.name
++        try:
++            field = opts.get_field(field_name)
++        except FieldDoesNotExist:
++            # Ignore query lookups.
++            continue
++        else:
++            if hasattr(field, 'path_infos'):
++                # This field is a relation; update opts to follow the relation.
++                opts = field.path_infos[-1].to_opts
++                if field.many_to_many:
++                    return True
++    return False
++
+ def prepare_lookup_value(key, value, separator=','):
+     """
+     Return a lookup value prepared to be used in queryset filtering.

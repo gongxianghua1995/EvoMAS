@@ -1,0 +1,22 @@
+diff --git a/django/db/models/fields/related.py b/django/db/models/fields/related.py
+index fad5560486..2a120b2c14 100644
+--- a/django/db/models/fields/related.py
++++ b/django/db/models/fields/related.py
+@@ -1179,8 +1179,16 @@ class ForeignKey(ForeignObject):
+     def db_type(self, connection):
+         return self.target_field.rel_db_type(connection=connection)
+ 
++    @property
++    def db_collation(self):
++        return getattr(self.target_field, "db_collation", None)
++
+     def db_parameters(self, connection):
+-        return {"type": self.db_type(connection), "check": self.db_check(connection)}
++        return {
++            "type": self.db_type(connection),
++            "check": self.db_check(connection),
++            "collation": self.db_collation,
++        }
+ 
+     def convert_empty_strings(self, value, expression, connection):
+         if (not value) and isinstance(value, str):

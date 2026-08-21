@@ -1,0 +1,41 @@
+diff --git a/sympy/sets/handlers/comparison.py b/sympy/sets/handlers/comparison.py
+index 6f7a19fccf..d06823d6db 100644
+--- a/sympy/sets/handlers/comparison.py
++++ b/sympy/sets/handlers/comparison.py
+@@ -57,3 +57,8 @@ def _eval_is_eq(lhs, rhs): # noqa: F811
+ @dispatch(Set, Set) # type:ignore
+ def _eval_is_eq(lhs, rhs): # noqa: F811
+     return None
++
++
++@dispatch(ProductSet, FiniteSet) # type:ignore
++def _eval_is_eq(lhs, rhs): # noqa: F811
++    return tfn[fuzzy_and([lhs.is_subset(rhs), rhs.is_subset(lhs)])]
+diff --git a/sympy/sets/sets.py b/sympy/sets/sets.py
+index 3c4aa86e36..634da5cfb7 100644
+--- a/sympy/sets/sets.py
++++ b/sympy/sets/sets.py
+@@ -801,6 +801,23 @@ def _contains(self, element):
+ 
+         return fuzzy_and(s._contains(e) for s, e in zip(self.sets, element))
+ 
++    def _eval_is_subset(self, other):
++        """Return True if ``self`` is a subset of ``other``.
++
++        Most of the heavy lifting is done by the constituent sets for the
++        case that ``other`` is also a ProductSet.  A finite ProductSet is
++        a subset of a FiniteSet iff every one of its elements belongs to
++        the FiniteSet.
++        """
++        if other.is_ProductSet:
++            if len(other.sets) != len(self.sets):
++                return False
++            return fuzzy_and(a.is_subset(b)
++                             for a, b in zip(self.sets, other.sets))
++        if other.is_FiniteSet and self.is_finite_set is True:
++            return fuzzy_and(other._contains(e) for e in self)
++        return None
++
+     def as_relational(self, *symbols):
+         symbols = [_sympify(s) for s in symbols]
+         if len(symbols) != len(self.sets) or not all(

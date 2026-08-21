@@ -1,0 +1,180 @@
+diff --git a/CHANGES b/CHANGES
+index bc932a7d4..20c2ef3c9 100644
+--- a/CHANGES
++++ b/CHANGES
+@@ -17,6 +17,8 @@ Features added
+ --------------
+ 
+ * #2076: autodoc: Allow overriding of exclude-members in skip-member function
++* linkcheck: Add :confval:`linkcheck_ignore_local` to ignore local links
++  (links to another page within the same documentation project)
+ * #7849: html: Add :confval:`html_codeblock_linenos_style` to change the style
+   of line numbers for code-blocks
+ * #7853: C and C++, support parameterized GNU style attributes.
+diff --git a/doc/usage/configuration.rst b/doc/usage/configuration.rst
+index eba6904c4..4bd3c4fc6 100644
+--- a/doc/usage/configuration.rst
++++ b/doc/usage/configuration.rst
+@@ -2475,6 +2475,14 @@ Options for the linkcheck builder
+ 
+    .. versionadded:: 1.5
+ 
++.. confval:: linkcheck_ignore_local
++
++   If true, the linkcheck builder ignores local links (i.e. links to another
++   page within the same documentation project) and does not check them.
++   The default is ``False``.
++
++   .. versionadded:: 3.2
++
+ .. confval:: linkcheck_auth
+ 
+    Pass authentication information when doing a ``linkcheck`` build.
+diff --git a/sphinx/builders/linkcheck.py b/sphinx/builders/linkcheck.py
+index dd5317087..ea1d6f413 100644
+--- a/sphinx/builders/linkcheck.py
++++ b/sphinx/builders/linkcheck.py
+@@ -212,17 +212,35 @@ class CheckExternalLinksBuilder(Builder):
+             # check for various conditions without bothering the network
+             if len(uri) == 0 or uri.startswith(('#', 'mailto:', 'ftp:')):
+                 return 'unchecked', '', 0
+-            elif not uri.startswith(('http:', 'https:')):
+-                return 'local', '', 0
++            for rex in self.to_ignore:
++                if rex.match(uri):
++                    return 'ignored', '', 0
++            if not uri.startswith(('http:', 'https:')):
++                if self.config.linkcheck_ignore_local:
++                    return 'unchecked', '', 0
++                else:
++                    # split off anchor
++                    pathname = uri.split('#', 1)[0]
++                    if pathname.startswith('/') or '://' in pathname:
++                        # can't check absolute paths or URIs with a scheme
++                        return 'unchecked', '', 0
++                    # decode percent-encoded characters
++                    pathname = unquote(pathname)
++                    # resolve the target document name
++                    docname = pathname
++                    if docname.endswith('.html'):
++                        docname = docname[:-len('.html')]
++                    docname = path.normpath(docname)
++                    if docname in self.env.found_docs:
++                        return 'working', '', 0
++                    else:
++                        return 'broken', __('local link not found'), 0
+             elif uri in self.good:
+                 return 'working', 'old', 0
+             elif uri in self.broken:
+                 return 'broken', self.broken[uri], 0
+             elif uri in self.redirected:
+                 return 'redirected', self.redirected[uri][0], self.redirected[uri][1]
+-            for rex in self.to_ignore:
+-                if rex.match(uri):
+-                    return 'ignored', '', 0
+ 
+             # need to actually check the URI
+             for _ in range(self.app.config.linkcheck_retries):
+@@ -365,6 +383,7 @@ def setup(app: Sphinx) -> Dict[str, Any]:
+     # Anchors starting with ! are ignored since they are
+     # commonly used for dynamic pages
+     app.add_config_value('linkcheck_anchors_ignore', ["^!"], None)
++    app.add_config_value('linkcheck_ignore_local', False, None)
+ 
+     return {
+         'version': 'builtin',
+diff --git a/tests/roots/test-linkcheck/links.txt b/tests/roots/test-linkcheck/links.txt
+index fa8f11e4c..a0b8a555a 100644
+--- a/tests/roots/test-linkcheck/links.txt
++++ b/tests/roots/test-linkcheck/links.txt
+@@ -14,3 +14,6 @@ Some additional anchors to exercise ignore code
+ 
+ .. image:: https://www.google.com/image.png
+ .. figure:: https://www.google.com/image2.png
++
++* `local link <links.html>`_
++* `local broken link <doesnotexist.html>`_
+diff --git a/tests/test_build_linkcheck.py b/tests/test_build_linkcheck.py
+index d1fec550f..99f865f1b 100644
+--- a/tests/test_build_linkcheck.py
++++ b/tests/test_build_linkcheck.py
+@@ -30,7 +30,9 @@ def test_defaults(app, status, warning):
+     # images should fail
+     assert "Not Found for url: https://www.google.com/image.png" in content
+     assert "Not Found for url: https://www.google.com/image2.png" in content
+-    assert len(content.splitlines()) == 5
++    # local links should fail
++    assert "local link not found" in content
++    assert len(content.splitlines()) == 6
+ 
+ 
+ @pytest.mark.sphinx('linkcheck', testroot='linkcheck', freshenv=True)
+@@ -47,8 +49,8 @@ def test_defaults_json(app, status, warning):
+                  "info"]:
+         assert attr in row
+ 
+-    assert len(content.splitlines()) == 8
+-    assert len(rows) == 8
++    assert len(content.splitlines()) == 10
++    assert len(rows) == 10
+     # the output order of the rows is not stable
+     # due to possible variance in network latency
+     rowsby = {row["uri"]:row for row in rows}
+@@ -83,6 +85,23 @@ def test_defaults_json(app, status, warning):
+     # images should fail
+     assert "Not Found for url: https://www.google.com/image.png" in \
+         rowsby["https://www.google.com/image.png"]["info"]
++    # local links
++    assert rowsby["links.html"] == {
++        'filename': 'links.txt',
++        'lineno': 18,
++        'status': 'working',
++        'code': 0,
++        'uri': 'links.html',
++        'info': ''
++    }
++    assert rowsby["doesnotexist.html"] == {
++        'filename': 'links.txt',
++        'lineno': 19,
++        'status': 'broken',
++        'code': 0,
++        'uri': 'doesnotexist.html',
++        'info': 'local link not found'
++    }
+ 
+ 
+ @pytest.mark.sphinx(
+@@ -92,8 +111,8 @@ def test_defaults_json(app, status, warning):
+                        'https://localhost:7777/doesnotexist',
+                        'http://www.sphinx-doc.org/en/1.7/intro.html#',
+                        'https://www.google.com/image.png',
+-                       'https://www.google.com/image2.png']
+-                   })
++                       'https://www.google.com/image2.png'],
++                   'linkcheck_ignore_local': True})
+ def test_anchors_ignored(app, status, warning):
+     app.builder.build_all()
+ 
+@@ -104,6 +123,22 @@ def test_anchors_ignored(app, status, warning):
+     assert not content
+ 
+ 
++@pytest.mark.sphinx(
++    'linkcheck', testroot='linkcheck', freshenv=True,
++    confoverrides={'linkcheck_ignore_local': True})
++def test_ignore_local(app, status, warning):
++    app.builder.build_all()
++
++    assert (app.outdir / 'output.txt').exists()
++    content = (app.outdir / 'output.txt').read_text()
++    print(content)
++
++    # local links should not be checked when linkcheck_ignore_local is True
++    assert "local link not found" not in content
++    assert "links.html" not in content
++    assert "doesnotexist.html" not in content
++
++
+ @pytest.mark.sphinx(
+     'linkcheck', testroot='linkcheck', freshenv=True,
+     confoverrides={'linkcheck_auth': [

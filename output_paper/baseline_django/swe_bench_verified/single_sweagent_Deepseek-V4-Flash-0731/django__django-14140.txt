@@ -1,0 +1,33 @@
+diff --git a/django/db/models/query_utils.py b/django/db/models/query_utils.py
+index ae0f886107..73c6b43e33 100644
+--- a/django/db/models/query_utils.py
++++ b/django/db/models/query_utils.py
+@@ -85,7 +85,7 @@ class Q(tree.Node):
+         if path.startswith('django.db.models.query_utils'):
+             path = path.replace('django.db.models.query_utils', 'django.db.models')
+         args, kwargs = (), {}
+-        if len(self.children) == 1 and not isinstance(self.children[0], Q):
++        if len(self.children) == 1 and getattr(self.children[0], 'conditional', False) is False:
+             child = self.children[0]
+             kwargs = {child[0]: child[1]}
+         else:
+diff --git a/tests/expressions/tests.py b/tests/expressions/tests.py
+index 9ecc033b6b..27d2355dbe 100644
+--- a/tests/expressions/tests.py
++++ b/tests/expressions/tests.py
+@@ -838,6 +838,15 @@ class BasicExpressionsTests(TestCase):
+             with self.subTest(conditions):
+                 self.assertCountEqual(Employee.objects.filter(conditions), [self.max])
+ 
++    def test_boolean_expression_combined_with_Q_deconstruct(self):
++        is_ceo = Company.objects.filter(ceo=OuterRef('pk'))
++        q = Q(is_ceo)
++        path, args, kwargs = q.deconstruct()
++        self.assertEqual(path, 'django.db.models.Q')
++        self.assertEqual(args, (is_ceo,))
++        self.assertEqual(kwargs, {})
++        self.assertEqual(Q(*args, **kwargs), q)
++
+ 
+ class IterableLookupInnerExpressionsTests(TestCase):
+     @classmethod

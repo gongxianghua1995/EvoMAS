@@ -1,0 +1,93 @@
+diff --git a/django/db/models/query.py b/django/db/models/query.py
+index be8580f2c4..9b989dce24 100644
+--- a/django/db/models/query.py
++++ b/django/db/models/query.py
+@@ -800,6 +800,14 @@ class QuerySet(AltersData):
+         self._prepare_for_bulk_create(objs)
+         with transaction.atomic(using=self.db, savepoint=False):
+             objs_with_pk, objs_without_pk = partition(lambda o: o.pk is None, objs)
++            if update_fields:
++                update_fields = [
++                    self.model._meta.get_field(name) for name in update_fields
++                ]
++            if unique_fields:
++                unique_fields = [
++                    self.model._meta.get_field(name) for name in unique_fields
++                ]
+             if objs_with_pk:
+                 returned_columns = self._batched_insert(
+                     objs_with_pk,
+diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py
+index 0562a71dd1..caf36382b5 100644
+--- a/django/db/models/sql/compiler.py
++++ b/django/db/models/sql/compiler.py
+@@ -1725,8 +1725,8 @@ class SQLInsertCompiler(SQLCompiler):
+         on_conflict_suffix_sql = self.connection.ops.on_conflict_suffix_sql(
+             fields,
+             self.query.on_conflict,
+-            self.query.update_fields,
+-            self.query.unique_fields,
++            (f.column for f in self.query.update_fields),
++            (f.column for f in self.query.unique_fields),
+         )
+         if (
+             self.returning_fields
+diff --git a/tests/bulk_create/models.py b/tests/bulk_create/models.py
+index 27abc416bd..1d0c10e4c0 100644
+--- a/tests/bulk_create/models.py
++++ b/tests/bulk_create/models.py
+@@ -136,3 +136,9 @@ class RelatedModel(models.Model):
+     name = models.CharField(max_length=15, null=True)
+     country = models.OneToOneField(Country, models.CASCADE, primary_key=True)
+     big_auto_fields = models.ManyToManyField(BigAutoFieldModel)
++
++
++class DbColumnModel(models.Model):
++    f1 = models.IntegerField(unique=True, db_column="F1")
++    f2 = models.IntegerField(db_column="F2")
++    name = models.CharField(max_length=15, null=True, db_column="Name")
+diff --git a/tests/bulk_create/tests.py b/tests/bulk_create/tests.py
+index 6c490d1235..3e4b17bbd4 100644
+--- a/tests/bulk_create/tests.py
++++ b/tests/bulk_create/tests.py
+@@ -21,6 +21,7 @@ from django.test import (
+ from .models import (
+     BigAutoFieldModel,
+     Country,
++    DbColumnModel,
+     NoFields,
+     NullableFields,
+     Pizzeria,
+@@ -772,3 +773,32 @@ class BulkCreateTests(TestCase):
+     @skipIfDBFeature("supports_update_conflicts_with_target")
+     def test_update_conflicts_no_unique_fields(self):
+         self._test_update_conflicts([])
++
++
++    @skipUnlessDBFeature(
++        "supports_update_conflicts", "supports_update_conflicts_with_target"
++    )
++    def test_update_conflicts_unique_fields_db_column(self):
++        DbColumnModel.objects.bulk_create(
++            [
++                DbColumnModel(f1=1, f2=1, name="a"),
++                DbColumnModel(f1=2, f2=2, name="b"),
++            ]
++        )
++        DbColumnModel.objects.bulk_create(
++            [
++                DbColumnModel(f1=1, f2=1, name="c"),
++                DbColumnModel(f1=2, f2=2, name="d"),
++            ],
++            update_conflicts=True,
++            update_fields=["name"],
++            unique_fields=["f1"],
++        )
++        self.assertEqual(DbColumnModel.objects.count(), 2)
++        self.assertCountEqual(
++            DbColumnModel.objects.values("f1", "f2", "name"),
++            [
++                {"f1": 1, "f2": 1, "name": "c"},
++                {"f1": 2, "f2": 2, "name": "d"},
++            ],
++        )

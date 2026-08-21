@@ -1,0 +1,80 @@
+diff --git a/sphinx/domains/python.py b/sphinx/domains/python.py
+index 7d39d80ed..ba021b36b 100644
+--- a/sphinx/domains/python.py
++++ b/sphinx/domains/python.py
+@@ -304,7 +304,7 @@ class PyXrefMixin:
+     def make_xrefs(self, rolename: str, domain: str, target: str,
+                    innernode: Type[TextlikeNode] = nodes.emphasis,
+                    contnode: Node = None, env: BuildEnvironment = None) -> List[Node]:
+-        delims = r'(\s*[\[\]\(\),](?:\s*or\s)?\s*|\s+or\s+|\.\.\.)'
++        delims = r'(\s*[\[\]\(\),](?:\s*or\s)?\s*|\s+or\s+|\s*\|\s*|\.\.\.)'
+         delims_re = re.compile(delims)
+         sub_targets = re.split(delims, target)
+ 
+diff --git a/sphinx/util/typing.py b/sphinx/util/typing.py
+index af6edcae0..7a90fded9 100644
+--- a/sphinx/util/typing.py
++++ b/sphinx/util/typing.py
+@@ -34,7 +34,10 @@ else:
+             return ref._eval_type(globalns, localns)
+ 
+ if sys.version_info > (3, 10):
+-    from types import Union as types_Union
++    try:
++        from types import Union as types_Union
++    except ImportError:
++        types_Union = None
+ else:
+     types_Union = None
+ 
+diff --git a/tests/test_domain_py.py b/tests/test_domain_py.py
+index 2614c8ff6..4a64c13ad 100644
+--- a/tests/test_domain_py.py
++++ b/tests/test_domain_py.py
+@@ -446,6 +446,46 @@ def test_pyfunction_with_number_literals(app):
+                                                         [nodes.inline, "1_6_0"])])])
+ 
+ 
++def test_pyfunction_rtype_union_pipe(app):
++    text = (".. py:function:: foo(text)\n"
++            "\n"
++            "   :returns: a text\n"
++            "   :rtype: bytes | str\n")
++    doctree = restructuredtext.parse(app, text)
++    print(doctree.pformat())
++    print("END")
++
++
++def test_pyfunction_type_field_union_or(app):
++    text = (".. py:function:: foo(text)\n"
++            "\n"
++            "   :param text: a text\n"
++            "   :type text: bytes or str\n")
++    doctree = restructuredtext.parse(app, text)
++    par = doctree[1][1][0][0][1][0]
++    assert par[0].astext() == 'text'
++    assert par[2][0].astext() == 'bytes'
++    assert par[3].astext() == ' or '
++    assert par[4][0].astext() == 'str'
++
++
++def test_pyfunction_type_field_union_pipe(app):
++    text = (".. py:function:: foo(text)\n"
++            "\n"
++            "   :param text: a text\n"
++            "   :type text: bytes | str\n")
++    doctree = restructuredtext.parse(app, text)
++    assert_node(doctree[1][1][0][0][1][0],
++                ([addnodes.literal_strong, "text"],
++                 " (",
++                 [pending_xref, addnodes.literal_emphasis, "bytes"],
++                 [addnodes.literal_emphasis, " | "],
++                 [pending_xref, addnodes.literal_emphasis, "str"],
++                 ")",
++                 " -- ",
++                 "a text"))
++
++
+ def test_pyfunction_with_union_type_operator(app):
+     text = ".. py:function:: hello(age: int | None)"
+     doctree = restructuredtext.parse(app, text)

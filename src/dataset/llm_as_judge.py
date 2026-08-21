@@ -248,7 +248,7 @@ class LLMAsJudgeEvaluator:
         self,
         model_id: str = "bedrock:us.anthropic.claude-3-5-sonnet-20241022-v2:0",
         temperature: float = 0.0,
-        max_tokens: int = 1024,
+        max_tokens: int = 4096,
         dataset_name: str = ""
     ):
         """
@@ -257,7 +257,9 @@ class LLMAsJudgeEvaluator:
         Args:
             model_id: Model to use for judging
             temperature: Sampling temperature (default: 0.0 for consistency)
-            max_tokens: Max tokens for judge response
+            max_tokens: Max tokens for judge response (default 4096; reasoning
+                models like Deepseek-V4-Flash burn ~1k tokens on internal
+                reasoning before emitting visible content, so 1024 is too low)
             dataset_name: Dataset name (reserved for future per-dataset prompts)
         """
         self.model_id = model_id
@@ -270,9 +272,12 @@ class LLMAsJudgeEvaluator:
             self.model = get_model(
                 model_id=model_id,
                 temperature=temperature,
-                max_tokens=max_tokens
+                max_tokens=max_tokens,
+                disable_reasoning=True,
             )
-            logger.info(f"Initialized LLM-as-Judge with {model_id} (dataset: {dataset_name or 'generic'})")
+            from src.meta_model.metamodel import _wrap_meta_model_with_step_logger
+            self.model = _wrap_meta_model_with_step_logger(self.model, "judge")
+            logger.info(f"Initialized LLM-as-Judge with {model_id} (dataset: {dataset_name or 'generic'}, reasoning disabled)")
         except Exception as e:
             logger.error(f"Failed to initialize LLM-as-Judge: {e}")
             raise

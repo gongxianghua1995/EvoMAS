@@ -1,0 +1,63 @@
+diff --git a/django/db/backends/sqlite3/schema.py b/django/db/backends/sqlite3/schema.py
+index b3a2f4282b..527b885a7d 100644
+--- a/django/db/backends/sqlite3/schema.py
++++ b/django/db/backends/sqlite3/schema.py
+@@ -173,6 +173,35 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
+         else:
+             super().alter_field(model, old_field, new_field, strict=strict)
+ 
++    def _field_should_be_altered(self, old_field, new_field):
++        _, old_path, old_args, old_kwargs = old_field.deconstruct()
++        _, new_path, new_args, new_kwargs = new_field.deconstruct()
++        # Don't alter when:
++        # - changing only a field name
++        # - changing an attribute that doesn't affect the schema
++        # - adding only a db_column and the column name is not changed
++        non_database_attrs = [
++            "blank",
++            "choices",
++            "db_column",
++            "editable",
++            "error_messages",
++            "help_text",
++            "limit_choices_to",
++            # Database-level options are not supported, see #21961.
++            "on_delete",
++            "related_name",
++            "related_query_name",
++            "validators",
++            "verbose_name",
++        ]
++        for attr in non_database_attrs:
++            old_kwargs.pop(attr, None)
++            new_kwargs.pop(attr, None)
++        return self.quote_name(old_field.column) != self.quote_name(
++            new_field.column
++        ) or (old_path, old_args, old_kwargs) != (new_path, new_args, new_kwargs)
++
+     def _remake_table(
+         self, model, create_field=None, delete_field=None, alter_field=None
+     ):
+diff --git a/tests/schema/tests.py b/tests/schema/tests.py
+index d9e59d32dc..687c888d89 100644
+--- a/tests/schema/tests.py
++++ b/tests/schema/tests.py
+@@ -3961,6 +3961,18 @@ class SchemaTests(TransactionTestCase):
+         with connection.schema_editor() as editor, self.assertNumQueries(0):
+             editor.alter_field(Book, new_field, old_field, strict=True)
+ 
++    def test_alter_field_choices_noop(self):
++        """
++        No queries are performed when changing the choices attribute.
++        """
++        with connection.schema_editor() as editor:
++            editor.create_model(Author)
++        old_field = Author._meta.get_field("name")
++        new_field = CharField(max_length=255, choices=[("a", "A"), ("b", "B")])
++        new_field.set_attributes_from_name("name")
++        with connection.schema_editor() as editor, self.assertNumQueries(0):
++            editor.alter_field(Author, old_field, new_field, strict=True)
++
+     def test_add_textfield_unhashable_default(self):
+         # Create the table
+         with connection.schema_editor() as editor:

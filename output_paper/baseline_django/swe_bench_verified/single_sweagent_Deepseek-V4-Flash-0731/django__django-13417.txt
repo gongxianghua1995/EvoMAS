@@ -1,0 +1,39 @@
+diff --git a/django/db/models/query.py b/django/db/models/query.py
+index 85cd8311a7..164a4f7bcb 100644
+--- a/django/db/models/query.py
++++ b/django/db/models/query.py
+@@ -1218,14 +1218,16 @@ class QuerySet:
+     def ordered(self):
+         """
+         Return True if the QuerySet is ordered -- i.e. has an order_by()
+-        clause or a default ordering on the model (or is empty).
++        clause or a default ordering on the model (or is empty). Default
++        ordering is ignored in GROUP BY queries.
+         """
+         if isinstance(self, EmptyQuerySet):
+             return True
+         if self.query.extra_order_by or self.query.order_by:
+             return True
+         elif self.query.default_ordering and self.query.get_meta().ordering:
+-            return True
++            # In GROUP BY queries, the default ordering is ignored.
++            return not self.query.group_by
+         else:
+             return False
+ 
+diff --git a/tests/queries/tests.py b/tests/queries/tests.py
+index f9a57b088a..dec4f2b03f 100644
+--- a/tests/queries/tests.py
++++ b/tests/queries/tests.py
+@@ -2084,6 +2084,11 @@ class QuerysetOrderedTests(unittest.TestCase):
+         self.assertIs(qs.ordered, False)
+         self.assertIs(qs.order_by('num_notes').ordered, True)
+ 
++    def test_group_by_default_ordering(self):
++        qs = Note.objects.annotate(num_notes=Count('tag'))
++        self.assertIs(qs.ordered, False)
++        self.assertIs(qs.order_by('note').ordered, True)
++
+ 
+ @skipUnlessDBFeature('allow_sliced_subqueries_with_in')
+ class SubqueryTests(TestCase):

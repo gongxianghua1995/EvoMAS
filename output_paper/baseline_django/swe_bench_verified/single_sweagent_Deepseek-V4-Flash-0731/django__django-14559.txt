@@ -1,0 +1,56 @@
+diff --git a/django/db/models/query.py b/django/db/models/query.py
+index 387deca527..5f9cfd4557 100644
+--- a/django/db/models/query.py
++++ b/django/db/models/query.py
+@@ -541,7 +541,7 @@ class QuerySet:
+         if any(f.primary_key for f in fields):
+             raise ValueError('bulk_update() cannot be used with primary key fields.')
+         if not objs:
+-            return
++            return 0
+         # PK is used twice in the resulting update query, once in the filter
+         # and once in the WHEN. Each field will also have one CAST.
+         max_batch_size = connections[self.db].ops.bulk_batch_size(['pk', 'pk'] + fields, objs)
+@@ -564,8 +564,10 @@ class QuerySet:
+                 update_kwargs[field.attname] = case_statement
+             updates.append(([obj.pk for obj in batch_objs], update_kwargs))
+         with transaction.atomic(using=self.db, savepoint=False):
++            updated = 0
+             for pks, update_kwargs in updates:
+-                self.filter(pk__in=pks).update(**update_kwargs)
++                updated += self.filter(pk__in=pks).update(**update_kwargs)
++        return updated
+     bulk_update.alters_data = True
+ 
+     def get_or_create(self, defaults=None, **kwargs):
+diff --git a/docs/ref/models/querysets.txt b/docs/ref/models/querysets.txt
+index 5dc7a6b5bc..2a31b4712c 100644
+--- a/docs/ref/models/querysets.txt
++++ b/docs/ref/models/querysets.txt
+@@ -2231,6 +2231,8 @@ instances, generally with one query::
+     >>> objs[1].headline = 'This is entry 2'
+     >>> Entry.objects.bulk_update(objs, ['headline'])
+ 
++This method returns the number of objects updated.
++
+ :meth:`.QuerySet.update` is used to save the changes, so this is more efficient
+ than iterating through the list of models and calling ``save()`` on each of
+ them, but it has a few caveats:
+diff --git a/tests/queries/test_bulk_update.py b/tests/queries/test_bulk_update.py
+index be794df718..fa001191ec 100644
+--- a/tests/queries/test_bulk_update.py
++++ b/tests/queries/test_bulk_update.py
+@@ -35,6 +35,13 @@ class BulkUpdateNoteTests(TestCase):
+             [cat.note for cat in self.notes]
+         )
+ 
++    def test_bulk_update_returns_number_updated(self):
++        for note in self.notes:
++            note.note = 'test-%s' % note.id
++        with self.assertNumQueries(1):
++            updated = Note.objects.bulk_update(self.notes, ['note'])
++        self.assertEqual(updated, len(self.notes))
++
+     def test_multiple_fields(self):
+         for note in self.notes:
+             note.note = 'test-%s' % note.id

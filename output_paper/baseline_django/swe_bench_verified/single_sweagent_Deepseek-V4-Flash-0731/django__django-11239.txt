@@ -1,0 +1,57 @@
+diff --git a/django/db/backends/postgresql/client.py b/django/db/backends/postgresql/client.py
+index cf4df76882..ff871e0397 100644
+--- a/django/db/backends/postgresql/client.py
++++ b/django/db/backends/postgresql/client.py
+@@ -30,6 +30,9 @@ class DatabaseClient(BaseDatabaseClient):
+         subprocess_env = os.environ.copy()
+         if passwd:
+             subprocess_env['PGPASSWORD'] = str(passwd)
++        for key in ('sslmode', 'sslrootcert', 'sslcert', 'sslkey'):
++            if conn_params.get(key):
++                subprocess_env['PG%s' % key.upper()] = conn_params[key]
+         try:
+             # Allow SIGINT to pass to psql to abort queries.
+             signal.signal(signal.SIGINT, signal.SIG_IGN)
+diff --git a/tests/dbshell/test_postgresql.py b/tests/dbshell/test_postgresql.py
+index a33e7f6482..f5bbe1e1be 100644
+--- a/tests/dbshell/test_postgresql.py
++++ b/tests/dbshell/test_postgresql.py
+@@ -19,6 +19,10 @@ class PostgreSqlDbshellCommandTestCase(SimpleTestCase):
+         def _mock_subprocess_run(*args, env=os.environ, **kwargs):
+             self.subprocess_args = list(*args)
+             self.pgpassword = env.get('PGPASSWORD')
++            self.pgsslmode = env.get('PGSSLMODE')
++            self.pgsslrootcert = env.get('PGSSLROOTCERT')
++            self.pgsslcert = env.get('PGSSLCERT')
++            self.pgsslkey = env.get('PGSSLKEY')
+             return subprocess.CompletedProcess(self.subprocess_args, 0)
+         with mock.patch('subprocess.run', new=_mock_subprocess_run):
+             DatabaseClient.runshell_db(dbinfo)
+@@ -65,6 +69,27 @@ class PostgreSqlDbshellCommandTestCase(SimpleTestCase):
+             )
+         )
+ 
++    def test_ssl_certificate(self):
++        self.assertEqual(
++            self._run_it({
++                'database': 'dbname',
++                'user': 'someuser',
++                'host': 'somehost',
++                'port': '444',
++                'sslmode': 'verify-ca',
++                'sslrootcert': 'root.crt',
++                'sslcert': 'client.crt',
++                'sslkey': 'client.key',
++            }), (
++                ['psql', '-U', 'someuser', '-h', 'somehost', '-p', '444', 'dbname'],
++                None,
++            )
++        )
++        self.assertEqual(self.pgsslmode, 'verify-ca')
++        self.assertEqual(self.pgsslrootcert, 'root.crt')
++        self.assertEqual(self.pgsslcert, 'client.crt')
++        self.assertEqual(self.pgsslkey, 'client.key')
++
+     def test_accent(self):
+         username = 'rôle'
+         password = 'sésame'

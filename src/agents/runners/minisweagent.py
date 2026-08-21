@@ -25,21 +25,213 @@ from .base import BaseAgentRunner
 
 logger = logging.getLogger(__name__)
 
+
+# Prepended to every SWE-bench problem statement to counter the "over-analysis"
+# death spiral: agent keeps running `git show`/`git log -S`/`cat` on historical
+# commits instead of editing the actual source files. Observed burning the full
+# step_limit (50) without a single file edit on psf/requests-1724.
+ACTION_FIRST_PREAMBLE = """IMPORTANT WORKFLOW GUIDANCE:
+- Your job is to WRITE A PATCH that fixes the bug, not to investigate how it was fixed historically.
+- Do NOT spend steps running `git log -S`, `git show <old-commit>`, or archaeology on past fixes. Those commits are from FUTURE versions and will mislead you.
+- Workflow: (1) `grep`/`sed -n` to locate the relevant code, (2) READ 10-20 lines of context, (3) EDIT the file directly, (4) run the repro/test ONCE, (5) SUBMIT.
+- If you have not edited any file by step 10, you are off-track — edit immediately.
+- Prefer one targeted edit over multiple exploratory commands.
+
+"""
+
+
+def _resolve_model_id(model_id: str) -> str:
+    """Fallback a ``bedrock:`` model_id to ``EVO_MAS_FALLBACK_MODEL`` when boto3
+    is unavailable, so MAS configs whose agents still carry Bedrock model_ids
+    can still execute on non-AWS / OpenAI-compatible environments.
+
+    In AWS environments with boto3 installed this is a no-op.
+    """
+    if not (model_id or "").startswith("bedrock:"):
+        return model_id
+    try:
+        import boto3  # noqa: F401
+        return model_id
+    except ImportError:
+        fb = os.environ.get("EVO_MAS_FALLBACK_MODEL")
+        if fb:
+            logger.warning(
+                "boto3 unavailable: falling back agent model '%s' -> '%s'",
+                model_id, fb,
+            )
+            return fb
+        return model_id
+
+
+def _wrap_query_with_step_logger(model: Any, agent_id: str, work_dir: Optional[Path] = None) -> None:
+    """Wrap model.query to log each step's IN/OUT to the standard logger.
+
+    Also detects the "task is done but framework keeps demanding tool calls"
+    death spiral and forcibly injects mini-swe-agent's submit command so the
+    agent exits cleanly instead of burning `step_limit` LLM calls on no-ops.
+
+    `work_dir` is used to anchor the submit command with an absolute `cd` so
+    that `git diff` runs inside the repo even if the agent has cd'd elsewhere.
+    """
+    import re
+    import time as _time
+
+    original_query = model.query
+    step_counter = [0]
+    FRAMEWORK_NUDGE = "No tool calls found in the response. Every response MUST include at least one tool call."
+    cd_prefix = f"cd {work_dir} && " if work_dir else ""
+    SUBMIT_CMD = f"{cd_prefix}echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT ; git add -A 2>/dev/null ; git diff --cached 2>/dev/null ; true"
+    POST_PASSED_GRACE = 15
+    PASSED_MARKER_RE = re.compile(r"(\d+ passed|all tests? passed|PASSED)", re.IGNORECASE)
+
+    submit_forced = [False]
+    passed_at_step = [None]
+
+    def _fmt_response(response) -> str:
+        if not isinstance(response, dict):
+            return str(response)
+        parts = []
+        content = str(response.get("content") or "").strip()
+        if content:
+            parts.append(f"[content]\n{content}")
+        reasoning = str(response.get("reasoning_content") or "").strip()
+        if reasoning:
+            parts.append(f"[reasoning]\n{reasoning}")
+        actions = (response.get("extra") or {}).get("actions") or []
+        for i, a in enumerate(actions):
+            cmd = a.get("command") if isinstance(a, dict) else a
+            parts.append(f"[action {i}]\n{cmd}")
+        if not actions:
+            for i, tc in enumerate(response.get("tool_calls") or []):
+                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                parts.append(f"[tool_call {i}] {fn.get('name', '?')}({fn.get('arguments', '')})")
+        return "\n\n".join(parts) if parts else "<empty>"
+
+    def _force_submit(response: dict) -> dict:
+        """Rewrite response so the next env step executes the submit command."""
+        extra = response.setdefault("extra", {})
+        actions = extra.get("actions") or []
+        forced_action = {"command": SUBMIT_CMD}
+        if actions and isinstance(actions[0], dict) and "tool_call_id" in actions[0]:
+            forced_action["tool_call_id"] = actions[0]["tool_call_id"]
+        extra["actions"] = [forced_action]
+        tcs = response.get("tool_calls") or []
+        if tcs and isinstance(tcs[0], dict):
+            import json as _json
+            tcs[0].setdefault("function", {})["arguments"] = _json.dumps({"command": SUBMIT_CMD})
+            tcs[0]["function"]["name"] = "bash"
+            response["tool_calls"] = [tcs[0]]
+        return response
+
+    def logged_query(messages, **kwargs):
+        step_counter[0] += 1
+        step = step_counter[0]
+        started = _time.time()
+
+        forced_here = False
+        reason = None
+
+        if passed_at_step[0] is None and messages:
+            last = messages[-1]
+            if last.get("role") in ("tool", "observation"):
+                last_content = str(last.get("content") or "")
+                if PASSED_MARKER_RE.search(last_content):
+                    passed_at_step[0] = step - 1
+                    logger.info(
+                        f"[LLM {agent_id} step {step}] Pytest PASSED detected in "
+                        f"observation (grace window: {POST_PASSED_GRACE} more steps)."
+                    )
+
+        if not submit_forced[0] and step >= 3 and messages:
+            last = messages[-1]
+            last_role = last.get("role")
+            last_content = str(last.get("content") or "") if last_role else ""
+
+            if last_role in ("user", "tool", "observation") and FRAMEWORK_NUDGE in last_content:
+                reason = "framework nudged for a tool call"
+            elif (
+                passed_at_step[0] is not None
+                and step - passed_at_step[0] >= POST_PASSED_GRACE
+            ):
+                reason = (
+                    f"post-PASSED grace of {POST_PASSED_GRACE} steps expired "
+                    f"(passed at step {passed_at_step[0]})"
+                )
+
+            if reason:
+                logger.warning(
+                    f"[LLM {agent_id} step {step}] Forcing submit ({reason})."
+                )
+                response = {
+                    "content": "",
+                    "role": "assistant",
+                    "extra": {"actions": [{"command": SUBMIT_CMD}]},
+                }
+                submit_forced[0] = True
+                forced_here = True
+
+        if not forced_here:
+            response = original_query(messages, **kwargs)
+        duration = _time.time() - started
+
+        # Strip empty tool_calls (DashScope rejects them in history)
+        if isinstance(response, dict) and not response.get("tool_calls"):
+            response.pop("tool_calls", None)
+
+        out_text = _fmt_response(response)
+        if len(out_text) > 2000:
+            out_text = out_text[:2000] + f"\n... [truncated, total {len(out_text)} chars]"
+
+        last_in = ""
+        for m in reversed(messages or []):
+            role = m.get("role")
+            if role in ("tool", "observation", "user", "system"):
+                raw = str(m.get("content", ""))
+                if len(raw) > 1000:
+                    raw = raw[:1000] + f"\n... [truncated, total {len(raw)} chars]"
+                last_in = f"[{role}]\n{raw}"
+                break
+
+        logger.info(
+            f"\n{'='*20} [LLM {agent_id} step {step}] ({duration:.1f}s) {'='*20}\n"
+            f"--- IN ---\n{last_in}\n"
+            f"--- OUT ---\n{out_text}\n"
+            f"{'='*60}"
+        )
+        return response
+
+    model.query = logged_query
+
+
 # Configuration paths — resolve relative to project root, overridable via env vars
 EVOMAS_CONFIG_DIR = Path(os.environ.get(
     "EVOMAS_AGENT_CONFIG_DIR",
     str(Path("config/agent_configs").resolve())
 ))
-MINISWEAGENT_CONFIG_DIR = Path(os.environ.get(
-    "MINISWEAGENT_CONFIG_DIR",
-    str(Path("config/minisweagent").resolve())
-))
+
+# Resolve the mini-swe-agent config dir: prefer the project-local override,
+# then fall back to the config directory shipped inside the minisweagent
+# package so baseline runs work out-of-the-box without copying configs.
+def _resolve_minisweagent_config_dir() -> Path:
+    override = os.environ.get("MINISWEAGENT_CONFIG_DIR")
+    if override:
+        return Path(override)
+    project_local = Path("config/minisweagent").resolve()
+    if project_local.exists():
+        return project_local
+    try:
+        import minisweagent
+        return Path(minisweagent.__file__).parent / "config"
+    except ImportError:
+        return project_local
+
+MINISWEAGENT_CONFIG_DIR = _resolve_minisweagent_config_dir()
 
 # Available configurations
 CONFIG_ALIASES = {
-    "default": EVOMAS_CONFIG_DIR / "config_default.yaml",
-    "simple": EVOMAS_CONFIG_DIR / "config_simple.yaml",
-    "swebench": MINISWEAGENT_CONFIG_DIR / "extra" / "swebench.yaml",
+    "default": MINISWEAGENT_CONFIG_DIR / "default.yaml",
+    "simple": MINISWEAGENT_CONFIG_DIR / "mini.yaml",
+    "swebench": MINISWEAGENT_CONFIG_DIR / "benchmarks" / "swebench.yaml",
     "mini_default": MINISWEAGENT_CONFIG_DIR / "default.yaml",
 }
 
@@ -217,6 +409,14 @@ class MinisweagentRunner(BaseAgentRunner):
             self.agent_config = {}
             self.env_config = {}
 
+        # Default step_limit for SWE-bench tasks (prevents infinite loops).
+        # Kept low because the post-PASSED grace + framework-nudge safety net
+        # should submit within ~step_at_passed + 15; anything past that is spin.
+        if 'step_limit' not in self.agent_config or self.agent_config.get('step_limit') == 0:
+            self.agent_config['step_limit'] = 50
+        if 'cost_limit' not in self.agent_config or self.agent_config.get('cost_limit') == 0:
+            self.agent_config['cost_limit'] = 10.0  # Default $10 budget
+
         logger.info(f"MinisweagentRunner initialized with config: {config}")
         logger.info(f"  step_limit: {self.agent_config.get('step_limit', 'default')}")
         logger.info(f"  cost_limit: {self.agent_config.get('cost_limit', 'default')}")
@@ -238,25 +438,46 @@ class MinisweagentRunner(BaseAgentRunner):
         except ImportError:
             logger.warning("dotenv not available, relying on existing environment")
 
+        # Route "openai:*" model IDs to the configured OpenAI-compatible endpoint.
+        import os as _os
+        if "openai:" in spec.model_id:
+            api_base = _os.environ.get("OPENAI_BASE_URL") or _os.environ.get("API_BASE")
+            api_key = _os.environ.get("OPENAI_API_KEY") or _os.environ.get("API_KEY")
+            if not api_base or not api_key:
+                raise RuntimeError(
+                    "openai:* model requires OPENAI_BASE_URL/OPENAI_API_KEY "
+                    "(or API_BASE/API_KEY) to be set in the environment or .env"
+                )
+            _os.environ["LITELLM_BASE_URL"] = api_base
+            _os.environ["LITELLM_API_KEY"] = api_key
+            _os.environ["OPENAI_API_KEY"] = api_key
+            import litellm
+            litellm.api_base = api_base
+            # Cost tracking fails for models not in litellm's price table
+            _os.environ.setdefault("MSWEA_COST_TRACKING", "ignore_errors")
+
         # Use mini-swe-agent's native model loading (uses litellm directly)
         # This ensures we use the exact same model interface as the original
         from minisweagent.models import get_model as miniswe_get_model
 
         # Convert EvoMAS model_id format to litellm format
-        # e.g., "openai:gpt-4.1" -> "gpt-4.1" (litellm auto-detects OpenAI)
+        # (fall back to EVO_MAS_FALLBACK_MODEL when a bedrock model_id cannot
+        # be used because boto3 is missing)
+        # e.g., "openai:gpt-4.1" -> "openai/gpt-4.1" (litellm needs provider prefix
+        # to route to OpenAI-compatible endpoint, esp. for non-native models like
+        # Deepseek served via OPENAI_BASE_URL)
         # e.g., "anthropic:claude-3-5-sonnet" -> "anthropic/claude-3-5-sonnet"
-        model_id = spec.model_id
+        model_id = _resolve_model_id(spec.model_id)
         if ':' in model_id:
             provider, model_name = model_id.split(':', 1)
-            if provider.lower() == 'openai':
-                # litellm auto-detects OpenAI models
-                model_id = model_name
-            else:
-                # Other providers use "provider/model" format
-                model_id = f"{provider}/{model_name}"
+            # litellm uses "provider/model" format
+            model_id = f"{provider}/{model_name}"
 
         logger.info(f"Loading model with litellm: {model_id}")
         model = miniswe_get_model(model_id)
+
+        # Log every step's IN/OUT to run.log.
+        _wrap_query_with_step_logger(model, spec.id, work_dir=working_dir)
 
         # Create local environment
         local_env_config = {
@@ -284,12 +505,29 @@ class MinisweagentRunner(BaseAgentRunner):
         logger.info(f"  Config: {self.config_name}, step_limit={agent_config.get('step_limit')}")
         return agent
 
-    def _extract_repo_path(self, task: str) -> Optional[Path]:
-        """Extract repository path from SWE-bench task query."""
+    def _extract_repo_path(self, task: str, instance_id: str = None) -> Optional[Path]:
+        """Extract repository path from SWE-bench task query or instance_id."""
         import re
+
+        # Try to extract from task query first
         match = re.search(r'Repository:\s*(/[^\s\n]+)', task)
         if match:
             return Path(match.group(1))
+        match = re.search(r'Repository:\s*([^\s/]+/([^\s/]+))', task)
+        if match:
+            repo_name = match.group(2)
+            candidate = Path("dataset/repos") / repo_name
+            if candidate.exists():
+                return candidate
+
+        # Try to extract from instance_id (e.g., "sympy__sympy-11400" -> "sympy")
+        if instance_id:
+            repo_match = re.match(r'(\w+)__', instance_id)
+            if repo_match:
+                repo_name = repo_match.group(1)
+                local_repo = Path("dataset/repos") / repo_name
+                if local_repo.exists():
+                    return local_repo
         return None
 
     def _reset_repo(self, repo_path: Path):
@@ -345,8 +583,12 @@ class MinisweagentRunner(BaseAgentRunner):
 
     def run(self, spec: AgentSpec, task: str, context: Optional[Dict[str, Any]] = None) -> AgentResult:
         """Run mini-swe-agent with configured settings."""
-        repo_path = self._extract_repo_path(task)
+        instance_id = context.get('instance_id') if context else None
+
+        # Extract repo path BEFORE extracting problem statement (which strips Repository: line)
+        repo_path = self._extract_repo_path(task, instance_id)
         use_repo_dir = repo_path is not None and repo_path.exists()
+        logger.debug(f"Repo detection: repo_path={repo_path}, use_repo_dir={use_repo_dir}, instance_id={instance_id}")
 
         if use_repo_dir:
             logger.info(f"Running mini-swe-agent in repository: {repo_path}")
@@ -367,32 +609,36 @@ class MinisweagentRunner(BaseAgentRunner):
                     context_str += f"- {key}: {value}\n"
                 enhanced_task = task + context_str
 
+            # Extract problem statement (this removes Repository:/Instance ID: lines)
             problem_statement = self._extract_problem_statement(enhanced_task)
 
+            # For minisweagent: prepend repo path so agent knows where to work
+            if use_repo_dir:
+                problem_statement = f"Repository: {repo_path}\nInstance ID: {instance_id or spec.id}\n\n{problem_statement}"
+                # Prepend action-first guidance to counter over-analysis death spiral
+                problem_statement = ACTION_FIRST_PREAMBLE + problem_statement
+
+            logger.debug(f"Problem statement preview: {problem_statement[:200]}...")
             logger.info(f"Running agent with step_limit={self.agent_config.get('step_limit')}")
-            exit_status, exit_message = agent.run(problem_statement)
+            run_result = agent.run(problem_statement)
+            exit_status = run_result.get('exit_status', 'unknown') if isinstance(run_result, dict) else run_result[0]
+            exit_message = run_result.get('submission', '') if isinstance(run_result, dict) else (run_result[1] if isinstance(run_result, tuple) else '')
 
             # The exit_message from Submitted exception contains the git diff
-            # (from: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && git add -A && git diff --cached)
-            # This is the primary output for SWE-bench patches
             output = exit_message
+            logger.info(f"Agent finished: {exit_status} (messages={len(agent.messages)})")
 
             # For local execution (non-Docker), also capture git diff as fallback
-            # In case the agent didn't use the submission command properly
             patch_content = ""
             if use_repo_dir:
-                # Try to get uncommitted changes
                 patch_content = self._get_git_diff(repo_path)
                 if not patch_content:
-                    # Also try staged changes
                     try:
                         import subprocess
                         result = subprocess.run(
                             ["git", "diff", "--cached"],
                             cwd=str(repo_path),
-                            capture_output=True,
-                            text=True,
-                            timeout=30
+                            capture_output=True, text=True, timeout=30
                         )
                         patch_content = result.stdout
                     except Exception:
@@ -401,7 +647,6 @@ class MinisweagentRunner(BaseAgentRunner):
                     logger.info(f"Captured git diff fallback ({len(patch_content)} bytes)")
 
             # Priority: submission output > git diff fallback
-            # If exit_message looks like a valid diff, use it
             if exit_message and exit_message.strip().startswith('diff --git'):
                 final_output = exit_message
                 logger.info("Using submission output (valid diff format)")
@@ -413,14 +658,18 @@ class MinisweagentRunner(BaseAgentRunner):
                 logger.info("Using raw output (no diff captured)")
             success = exit_status == "Submitted"
 
+            # agent.cost / agent.n_calls (mini-swe-agent v2.4+ aggregates at agent level)
+            model_cost = getattr(agent, 'cost', getattr(agent.model, 'cost', 0.0))
+            model_calls = getattr(agent, 'n_calls', getattr(agent.model, 'n_calls', 0))
+
             result = AgentResult(
                 agent_id=spec.id,
                 content=final_output,
                 metadata={
                     'exit_status': exit_status,
                     'exit_message': exit_message,
-                    'model_cost': agent.model.cost,
-                    'model_calls': agent.model.n_calls,
+                    'model_cost': model_cost,
+                    'model_calls': model_calls,
                     'total_messages': len(agent.messages),
                     'had_patch_file': bool(patch_content),
                     'used_repo_dir': use_repo_dir,
@@ -431,7 +680,7 @@ class MinisweagentRunner(BaseAgentRunner):
             )
 
             logger.info(f"Agent {spec.id} completed: {exit_status}")
-            logger.info(f"  Model calls: {agent.model.n_calls}, Cost: ${agent.model.cost:.4f}")
+            logger.info(f"  Model calls: {model_calls}, Cost: ${model_cost:.4f}")
             return result
 
         except Exception as e:

@@ -1,0 +1,51 @@
+diff --git a/django/db/migrations/serializer.py b/django/db/migrations/serializer.py
+index 7d226955d5..00e7bea1b7 100644
+--- a/django/db/migrations/serializer.py
++++ b/django/db/migrations/serializer.py
+@@ -267,9 +267,9 @@ class TypeSerializer(BaseSerializer):
+         if hasattr(self.value, "__module__"):
+             module = self.value.__module__
+             if module == builtins.__name__:
+-                return self.value.__name__, set()
++                return self.value.__qualname__, set()
+             else:
+-                return "%s.%s" % (module, self.value.__name__), {"import %s" % module}
++                return "%s.%s" % (module, self.value.__qualname__), {"import %s" % module}
+ 
+ 
+ class UUIDSerializer(BaseSerializer):
+diff --git a/tests/migrations/test_writer.py b/tests/migrations/test_writer.py
+index ca924f35ec..709c44cd4a 100644
+--- a/tests/migrations/test_writer.py
++++ b/tests/migrations/test_writer.py
+@@ -341,6 +341,17 @@ class WriterTests(SimpleTestCase):
+             "default=migrations.test_writer.IntEnum['A'])"
+         )
+ 
++    def test_serialize_nested_class(self):
++        # A nested class should be serialized with its qualname so it is
++        # referenced with the full path (e.g. Outer.Inner instead of Inner).
++        self.assertSerializedResultEqual(
++            self.NestedEnum,
++            (
++                "migrations.test_writer.WriterTests.NestedEnum",
++                {'import migrations.test_writer'},
++            ),
++        )
++
+     def test_serialize_choices(self):
+         class TextChoices(models.TextChoices):
+             A = 'A', 'A value'
+@@ -731,7 +742,11 @@ class WriterTests(SimpleTestCase):
+                 return ('DeconstructibleInstances', [], {})
+ 
+         string = MigrationWriter.serialize(models.CharField(default=DeconstructibleInstances))[0]
+-        self.assertEqual(string, "models.CharField(default=migrations.test_writer.DeconstructibleInstances)")
++        self.assertEqual(
++            string,
++            "models.CharField(default=migrations.test_writer.WriterTests."
++            "test_deconstruct_class_arguments.<locals>.DeconstructibleInstances)",
++        )
+ 
+     def test_register_serializer(self):
+         class ComplexSerializer(BaseSerializer):

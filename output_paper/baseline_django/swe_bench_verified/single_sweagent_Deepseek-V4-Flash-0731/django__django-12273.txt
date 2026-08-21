@@ -1,0 +1,20 @@
+diff --git a/django/db/models/base.py b/django/db/models/base.py
+index 844c01e95e..37209758b1 100644
+--- a/django/db/models/base.py
++++ b/django/db/models/base.py
+@@ -569,6 +569,15 @@ class Model(metaclass=ModelBase):
+         return getattr(self, meta.pk.attname)
+ 
+     def _set_pk_val(self, value):
++        seen = set()
++        for parent_link in self._meta.parents.values():
++            if parent_link is None:
++                continue
++            field = parent_link
++            while field is not None and field not in seen:
++                seen.add(field)
++                setattr(self, field.attname, value)
++                field = getattr(field, 'target_field', None)
+         return setattr(self, self._meta.pk.attname, value)
+ 
+     pk = property(_get_pk_val, _set_pk_val)

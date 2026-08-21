@@ -1,0 +1,40 @@
+diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py
+index 04e430a42e..d837db56d2 100644
+--- a/django/db/models/sql/compiler.py
++++ b/django/db/models/sql/compiler.py
+@@ -128,7 +128,10 @@ class SQLCompiler:
+         for expr, (sql, params, is_ref) in order_by:
+             # Skip References to the select clause, as all expressions in the
+             # select clause are already part of the group by.
+-            if not is_ref:
++            # Skip expressions that don't contain any column references (e.g.
++            # Random()) because they don't affect grouping. RawSQL expressions
++            # are kept since they may reference columns.
++            if not is_ref and expr.contains_column_references:
+                 expressions.extend(expr.get_group_by_cols())
+         having_group_by = self.having.get_group_by_cols() if self.having else ()
+         for expr in having_group_by:
+diff --git a/tests/aggregation/tests.py b/tests/aggregation/tests.py
+index f8aeceb2d0..2a4cf01c5e 100644
+--- a/tests/aggregation/tests.py
++++ b/tests/aggregation/tests.py
+@@ -112,6 +112,19 @@ class AggregateTestCase(TestCase):
+         with self.assertRaisesMessage(FieldError, msg):
+             Author.objects.values('age').order_by(Avg('book__rating'))
+ 
++    def test_aggregation_order_by_random(self):
++        # Random() in order_by() shouldn't be added to the GROUP BY clause of
++        # an aggregate query (regression test for #32823).
++        qs = Publisher.objects.annotate(rc=Count('book')).order_by('?').values('id', 'rc')
++        expected = {
++            self.p1.pk: 2,
++            self.p2.pk: 1,
++            self.p3.pk: 2,
++            self.p4.pk: 1,
++            self.p5.pk: 0,
++        }
++        self.assertEqual({row['id']: row['rc'] for row in qs}, expected)
++
+     def test_single_aggregate(self):
+         vals = Author.objects.aggregate(Avg("age"))
+         self.assertEqual(vals, {"age__avg": Approximate(37.4, places=1)})

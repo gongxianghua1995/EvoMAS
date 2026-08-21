@@ -1,0 +1,41 @@
+diff --git a/sphinx/util/docfields.py b/sphinx/util/docfields.py
+index 3a3367ebe..fd4ccc4b3 100644
+--- a/sphinx/util/docfields.py
++++ b/sphinx/util/docfields.py
+@@ -35,6 +35,22 @@ def _is_single_paragraph(node: nodes.field_body) -> bool:
+     return False
+ 
+ 
++def _parse_field_arg(arg: str) -> Tuple[str, str]:
++    """Parse an argument for a field.
++
++    The argument can have the form ``type name`` or ``name``.  In the former
++    case, the type is returned as well as the name.
++    """
++    if ' ' not in arg:
++        return '', arg
++
++    # The type can contain spaces (e.g. ``dict(str, str)``).  The name is
++    # always the last whitespace-delimited token because Python identifiers
++    # cannot contain spaces.
++    argtype, argname = arg.rsplit(None, 1)
++    return argtype, argname
++
++
+ class Field:
+     """A doc field that is never grouped.  It can have an argument or not, the
+     argument can be linked using a specified *rolename*.  Field should be used
+@@ -297,11 +313,8 @@ class DocFieldTransformer:
+ 
+             # also support syntax like ``:param type name:``
+             if typedesc.is_typed:
+-                try:
+-                    argtype, argname = fieldarg.split(None, 1)
+-                except ValueError:
+-                    pass
+-                else:
++                argtype, argname = _parse_field_arg(fieldarg)
++                if argtype:
+                     types.setdefault(typename, {})[argname] = \
+                         [nodes.Text(argtype)]
+                     fieldarg = argname

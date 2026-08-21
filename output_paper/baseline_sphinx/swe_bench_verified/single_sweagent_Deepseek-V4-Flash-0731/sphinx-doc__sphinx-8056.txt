@@ -1,0 +1,69 @@
+diff --git a/sphinx/ext/napoleon/docstring.py b/sphinx/ext/napoleon/docstring.py
+index b3daa06f1..04e5d8a34 100644
+--- a/sphinx/ext/napoleon/docstring.py
++++ b/sphinx/ext/napoleon/docstring.py
+@@ -392,15 +392,21 @@ class GoogleDocstring:
+         lines = []
+         for _name, _type, _desc in fields:
+             _desc = self._strip_empty(_desc)
++            if ", " in _name:
++                _names = _name.split(", ")
++            else:
++                _names = [_name]
+             if any(_desc):
+                 _desc = self._fix_field_desc(_desc)
+-                field = ':%s %s: ' % (field_role, _name)
+-                lines.extend(self._format_block(field, _desc))
+-            else:
+-                lines.append(':%s %s:' % (field_role, _name))
++            for _name in _names:
++                if any(_desc):
++                    field = ':%s %s: ' % (field_role, _name)
++                    lines.extend(self._format_block(field, _desc))
++                else:
++                    lines.append(':%s %s:' % (field_role, _name))
+ 
+-            if _type:
+-                lines.append(':%s %s: %s' % (type_role, _name, _type))
++                if _type:
++                    lines.append(':%s %s: %s' % (type_role, _name, _type))
+         return lines + ['']
+ 
+     def _format_field(self, _name: str, _type: str, _desc: List[str]) -> List[str]:
+diff --git a/tests/test_ext_napoleon_docstring.py b/tests/test_ext_napoleon_docstring.py
+index bf3c878a8..888d3a39a 100644
+--- a/tests/test_ext_napoleon_docstring.py
++++ b/tests/test_ext_napoleon_docstring.py
+@@ -2202,6 +2202,32 @@ definition_after_normal_text : int
+         self.assertEqual(expected, actual)
+ 
+ 
++    def test_combined_parameters(self):
++        docstring = dedent("""\
++            Parameters
++            ----------
++            x1, x2 : array_like
++                Input arrays, description of `x1`, `x2`.
++            x3, x4 : array_like, optional
++                More arrays.
++        """)
++        expected = dedent("""\
++            :param x1: Input arrays, description of `x1`, `x2`.
++            :type x1: :class:`array_like`
++            :param x2: Input arrays, description of `x1`, `x2`.
++            :type x2: :class:`array_like`
++            :param x3: More arrays.
++            :type x3: :class:`array_like`, *optional*
++            :param x4: More arrays.
++            :type x4: :class:`array_like`, *optional*
++        """)
++        config = Config(napoleon_use_param=True, napoleon_use_rtype=True)
++        actual = str(NumpyDocstring(docstring, config))
++        self.assertEqual(expected, actual)
++
++
++
++
+ @contextmanager
+ def warns(warning, match):
+     match_re = re.compile(match)

@@ -43,7 +43,7 @@ def fmt_acc(v):
 # Meta-model (planning / mutation / crossover / memory operators): Claude Sonnet 4.5.
 META_MODEL_ID = "bedrock:global.anthropic.claude-sonnet-4-5-20250929-v1:0"
 META_MODEL_TEMPERATURE = 0.7
-META_MODEL_MAX_TOKENS = 8192
+META_MODEL_MAX_TOKENS = 16384
 
 # Available models for MAS worker agents. The meta-model can select from this
 # list when generating a new MAS config. Qwen3 235B leads as the default worker
@@ -145,6 +145,233 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# BASELINE MODE (no evolution, single config evaluation)
+# ============================================================================
+
+def _setup_baseline_logging(output_dir: str) -> None:
+    """Create ``output_dir`` and tee all logs + stdout/stderr into ``run.log``.
+
+    Keeps the existing stderr StreamHandler so console output is preserved, but
+    adds a FileHandler so every ``logger.*`` call and every ``print()`` (via
+    stdout/stderr redirection) is persisted alongside the results — nothing
+    should silently land in ``/tmp`` anymore.
+    """
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    log_file = out_path / "run.log"
+
+    # Attach a FileHandler to the root logger (preserves the default stderr handler)
+    root_logger = logging.getLogger()
+    # Avoid stacking duplicate file handlers on repeated calls
+    for h in root_logger.handlers:
+        if isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", "") == str(log_file):
+            break
+    else:
+        fh = logging.FileHandler(log_file, mode="a", encoding="utf-8")
+        fh.setLevel(logging.INFO)
+        fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        root_logger.addHandler(fh)
+
+    # Redirect stdout/stderr to the log file as well (tee to keep console)
+    _TeeStream.tee(log_file, stream_name="stdout")
+    _TeeStream.tee(log_file, stream_name="stderr")
+
+
+class _TeeStream:
+    """File-like wrapper that writes to both the original stream and a file."""
+
+    _installed = {}  # stream_name -> _TeeStream instance
+
+    @classmethod
+    def tee(cls, log_file: Path, stream_name: str) -> None:
+        original = getattr(sys, stream_name)
+        # Already teed to this file? skip
+        existing = cls._installed.get(stream_name)
+        if existing and getattr(existing, "_file_path", None) == str(log_file):
+            return
+        instance = cls(original, log_file)
+        setattr(sys, stream_name, instance)
+        cls._installed[stream_name] = instance
+
+    def __init__(self, original, log_file: Path):
+        self._original = original
+        self._file = open(log_file, "a", encoding="utf-8")
+        self._file_path = str(log_file)
+
+    def write(self, data):
+        if data:
+            try:
+                self._file.write(data)
+                self._file.flush()
+            except Exception:
+                pass
+            self._original.write(data)
+
+    def flush(self):
+        self._file.flush()
+        self._original.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+
+def _run_baseline(
+    dataset_name: str,
+    pool_dir: str,
+    config_name: Optional[str],
+    num_eval_tasks: int,
+    seed: int,
+    output_dir: str,
+    llm_as_judge: Optional[str],
+    task_ids: Optional[List[Union[int, str]]] = None,
+    repo_filter: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Evaluate one pool configuration directly, skipping all meta-model evolution.
+
+    Loads a YAML from the pool as-is and runs ``interpret_mas`` on the dataset.
+    No selection / generate / mutate / crossover / pool update happens.
+
+    Args:
+        dataset_name: Dataset to evaluate on.
+        pool_dir: Directory containing MAS pool YAMLs.
+        config_name: Basename (without .yaml) of the config to run. ``None`` or
+            "auto" picks the first YAML found in the pool (sorted by name).
+        num_eval_tasks: Number of tasks to evaluate.
+        seed: Random seed for task sampling.
+        output_dir: Where to save results.
+        llm_as_judge: Optional LLM-as-judge model id.
+        task_ids: Optional explicit task ids (overrides num_eval_tasks).
+        repo_filter: Optional repo name filter (e.g. "requests", "astropy/astropy").
+            When set, only tasks whose ``metadata.repo`` matches are sampled,
+            and output_dir is auto-suffixed with ``baseline_{repo}/``.
+
+    Returns:
+        Dict with the same summary keys as ``_run_single_batch`` so the CLI
+        summary printer works unchanged.
+    """
+    import random as _random
+
+    pool_path = Path(pool_dir)
+    yaml_files = sorted(list(pool_path.glob("*.yaml")) + list(pool_path.glob("*.yml")))
+    if not yaml_files:
+        raise ValueError(f"pool_dir contains no YAML files: {pool_dir}")
+
+    target = None
+    if config_name and config_name != "auto":
+        stem = config_name.removesuffix(".yaml").removesuffix(".yml")
+        for y in yaml_files:
+            if y.stem == stem:
+                target = y
+                break
+        if target is None:
+            avail = ", ".join(y.stem for y in yaml_files)
+            raise ValueError(f"Config '{config_name}' not found in {pool_dir}. Available: {avail}")
+    else:
+        target = yaml_files[0]
+
+    # Normalize repo_filter: accept "requests", "astropy/astropy", or "astropy__astropy-12907"
+    repo_short = None
+    if repo_filter:
+        rf = repo_filter.strip().rstrip("/")
+        # If owner/repo form, take the repo part
+        if "/" in rf:
+            rf = rf.split("/")[-1]
+        repo_short = rf
+        # When user passes a filter, default config to single_sweagent if not explicitly set
+        if (config_name is None or config_name == "auto") and (pool_path / "single_sweagent.yaml").exists():
+            target = pool_path / "single_sweagent.yaml"
+
+    # Auto-suffix output_dir by repo for isolation
+    if repo_short:
+        output_dir = f"{output_dir.rstrip('/')}/baseline_{repo_short}"
+    else:
+        # Even without repo filter, put under baseline_ subdir to avoid colliding with evolution runs
+        output_dir = f"{output_dir.rstrip('/')}/baseline"
+
+    # Create output directory early and redirect logs there so nothing lands in /tmp
+    _setup_baseline_logging(output_dir)
+
+    logger.info("=" * 80)
+    logger.info("EVOMAS - BASELINE MODE (no evolution)")
+    logger.info("=" * 80)
+    logger.info(f"Dataset: {dataset_name}")
+    logger.info(f"Pool:    {pool_dir}")
+    logger.info(f"Config:  {target.name}")
+    logger.info(f"Tasks:   {num_eval_tasks} (seed={seed})")
+    if repo_short:
+        logger.info(f"Repo filter: {repo_short}")
+    logger.info(f"Judge:   {llm_as_judge or 'dataset evaluator'}")
+    logger.info(f"Output:  {output_dir}")
+    logger.info("=" * 80)
+
+    # Sample task ids if not provided (mirror _run_single_batch's behaviour:
+    # pick the first num_eval_tasks deterministically using the seed).
+    if task_ids is None:
+        dataset = load_dataset(dataset_name, split="test")
+        # Apply repo filter on dataset rows for SWE-bench (metadata.repo)
+        if repo_short and dataset_name.startswith("swe"):
+            full_match = f"{repo_short}/{repo_short}"  # e.g. "requests/requests"
+            # Match either "owner/repo" or just "repo" in metadata.repo
+            filtered_idxs = [
+                i for i, t in enumerate(dataset)
+                if (t.metadata.get("repo", "") == full_match
+                    or t.metadata.get("repo", "").split("/")[-1] == repo_short)
+            ]
+            if not filtered_idxs:
+                raise ValueError(
+                    f"No tasks found for repo '{repo_filter}' in dataset {dataset_name}. "
+                    f"Available repos: {sorted({t.metadata.get('repo') for t in dataset})}"
+                )
+            logger.info(f"Repo filter '{repo_short}': {len(filtered_idxs)} tasks available")
+            rng = _random.Random(seed)
+            n = min(num_eval_tasks, len(filtered_idxs))
+            chosen_idxs = rng.sample(filtered_idxs, n) if n < len(filtered_idxs) else filtered_idxs
+            task_ids = [dataset[i].id for i in chosen_idxs]
+        else:
+            rng = _random.Random(seed)
+            n = min(num_eval_tasks, len(dataset))
+            idxs = rng.sample(range(len(dataset)), n) if n < len(dataset) else list(range(len(dataset)))
+            task_ids = [dataset[i].id for i in idxs] if dataset_name.startswith("swe") else idxs
+        logger.info(f"Sampled {len(task_ids)} task ids (first 3: {task_ids[:3]})")
+
+    result = interpret_mas(
+        config_path=str(target),
+        dataset_name=dataset_name,
+        num_tasks=num_eval_tasks,
+        task_ids=task_ids,
+        save_outputs=True,
+        output_dir=output_dir,
+        verbose=True,
+        llm_as_judge=llm_as_judge,
+    )
+
+    stats = result.get("statistics", {})
+    accuracy = stats.get("accuracy", 0)
+    reward = compute_reward(stats, beta=BETA, cost_weight=COST_WEIGHT)
+    output_location = result.get("output_location", f"{output_dir}/{dataset_name}/")
+
+    logger.info("\n" + "=" * 80)
+    logger.info("BASELINE COMPLETE")
+    logger.info("=" * 80)
+    logger.info(f"Accuracy (judge): {fmt_acc(accuracy)}")
+    logger.info(f"Reward:           {reward:.4f}")
+    logger.info(f"Results saved to: {output_location}")
+    logger.info("=" * 80)
+
+    return {
+        "initial_accuracy": accuracy,
+        "final_accuracy": accuracy,
+        "final_official_accuracy": stats.get("accuracy"),
+        "initial_reward": reward,
+        "final_reward": reward,
+        "improved": False,
+        "output_location": output_location,
+        "num_operations": 0,
+        "added_to_pool": False,
+    }
 
 
 # ============================================================================
@@ -1066,6 +1293,32 @@ Examples:
         help="Number of batches run in parallel inside the pipeline. Default 1 = serial. Increase cautiously (watch API rate limits)."
     )
 
+    parser.add_argument(
+        "--baseline",
+        type=str,
+        nargs="?",
+        const="auto",
+        default=None,
+        metavar="CONFIG",
+        help="Baseline mode: evaluate a single pool config directly without "
+             "any meta-model evolution. With no value, defaults to "
+             "single_sweagent.yaml for SWE-bench (or first config in pool). "
+             "Pass a config basename (e.g. single_sweagent) to pick a specific one. "
+             "Ignores --max-steps/--num-parents."
+    )
+
+    parser.add_argument(
+        "--repo",
+        type=str,
+        default=None,
+        metavar="REPO",
+        help="Filter tasks by repo (SWE-bench only). Accepts 'requests', "
+             "'astropy/astropy', or 'django'. When set: (1) only tasks whose "
+             "metadata.repo match are sampled; (2) output_dir is auto-suffixed "
+             "with baseline_<repo>/ for per-domain isolation; (3) default "
+             "config becomes single_sweagent.yaml."
+    )
+
     args = parser.parse_args()
 
     # Determine pool directory
@@ -1079,24 +1332,37 @@ Examples:
         return 1
 
     try:
-        # Run evolution pipeline
-        results = run_evolution_pipeline(
-            dataset_name=args.dataset,
-            pool_dir=pool_dir,
-            num_eval_tasks=args.num_eval_tasks,
-            max_steps=args.max_steps,
-            num_parents=args.num_parents,
-            seed=args.seed,
-            output_dir=args.output_dir,
-            meta_model_id=args.meta_model_id,
-            model_list=args.model_list if args.model_list else None,
-            llm_as_judge=args.llm_as_judge if args.llm_as_judge and args.llm_as_judge.lower() != 'none' else None,
-            task_ids=args.task_ids,
-            memory_path=args.memory_path,
-            memory_evolution=(args.memory_evolution.lower() == "true"),
-            batch_size=args.batch_size,
-            workers=args.workers,
-        )
+        if args.baseline is not None:
+            results = _run_baseline(
+                dataset_name=args.dataset,
+                pool_dir=pool_dir,
+                config_name=args.baseline,
+                num_eval_tasks=args.num_eval_tasks,
+                seed=args.seed,
+                output_dir=args.output_dir,
+                llm_as_judge=args.llm_as_judge if args.llm_as_judge and args.llm_as_judge.lower() != 'none' else None,
+                task_ids=args.task_ids,
+                repo_filter=args.repo,
+            )
+        else:
+            # Run evolution pipeline
+            results = run_evolution_pipeline(
+                dataset_name=args.dataset,
+                pool_dir=pool_dir,
+                num_eval_tasks=args.num_eval_tasks,
+                max_steps=args.max_steps,
+                num_parents=args.num_parents,
+                seed=args.seed,
+                output_dir=args.output_dir,
+                meta_model_id=args.meta_model_id,
+                model_list=args.model_list if args.model_list else None,
+                llm_as_judge=args.llm_as_judge if args.llm_as_judge and args.llm_as_judge.lower() != 'none' else None,
+                task_ids=args.task_ids,
+                memory_path=args.memory_path,
+                memory_evolution=(args.memory_evolution.lower() == "true"),
+                batch_size=args.batch_size,
+                workers=args.workers,
+            )
 
         # Print summary
         print("\n" + "=" * 80)

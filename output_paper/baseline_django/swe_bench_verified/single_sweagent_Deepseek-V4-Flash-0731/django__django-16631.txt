@@ -1,0 +1,48 @@
+diff --git a/django/contrib/auth/__init__.py b/django/contrib/auth/__init__.py
+index 155330c596..deafd85268 100644
+--- a/django/contrib/auth/__init__.py
++++ b/django/contrib/auth/__init__.py
+@@ -202,6 +202,21 @@ def get_user(request):
+                 session_hash_verified = session_hash and constant_time_compare(
+                     session_hash, user.get_session_auth_hash()
+                 )
++                if not session_hash_verified:
++                    # SECRET_KEY_FALLBACKS may contain keys used for sessions
++                    # before the most recent SECRET_KEY change.
++                    for secret in settings.SECRET_KEY_FALLBACKS:
++                        if constant_time_compare(
++                            session_hash, user.get_session_auth_hash(secret=secret)
++                        ):
++                            session_hash_verified = True
++                            # Update the session hash to use the active
++                            # SECRET_KEY so future requests don't need to fall
++                            # back to the SECRET_KEY_FALLBACKS.
++                            request.session[HASH_SESSION_KEY] = (
++                                user.get_session_auth_hash()
++                            )
++                            break
+                 if not session_hash_verified:
+                     request.session.flush()
+                     user = None
+diff --git a/django/contrib/auth/base_user.py b/django/contrib/auth/base_user.py
+index 5ee30bf59c..e5ff5be8af 100644
+--- a/django/contrib/auth/base_user.py
++++ b/django/contrib/auth/base_user.py
+@@ -131,14 +131,17 @@ class AbstractBaseUser(models.Model):
+         """
+         return is_password_usable(self.password)
+ 
+-    def get_session_auth_hash(self):
++    def get_session_auth_hash(self, secret=None):
+         """
+         Return an HMAC of the password field.
++
++        If ``secret`` is provided, use it instead of ``settings.SECRET_KEY``.
+         """
+         key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
+         return salted_hmac(
+             key_salt,
+             self.password,
++            secret=secret,
+             algorithm="sha256",
+         ).hexdigest()

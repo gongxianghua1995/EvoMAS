@@ -1,0 +1,71 @@
+diff --git a/django/db/backends/sqlite3/schema.py b/django/db/backends/sqlite3/schema.py
+index 6752a8e3c0..f063012f26 100644
+--- a/django/db/backends/sqlite3/schema.py
++++ b/django/db/backends/sqlite3/schema.py
+@@ -324,10 +324,16 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
+ 
+     def add_field(self, model, field):
+         """Create a field on a model."""
+-        # Fields with default values cannot by handled by ALTER TABLE ADD
++        # Fields with default values cannot be handled by ALTER TABLE ADD
+         # COLUMN statement because DROP DEFAULT is not supported in
+         # ALTER TABLE.
+-        if not field.null or self.effective_default(field) is not None:
++        # Fields with unique constraints cannot be handled by ALTER TABLE ADD
++        # COLUMN because SQLite doesn't support adding a UNIQUE column.
++        if (
++            not field.null
++            or self.effective_default(field) is not None
++            or field.unique
++        ):
+             self._remake_table(model, create_field=field)
+         else:
+             super().add_field(model, field)
+diff --git a/tests/schema/tests.py b/tests/schema/tests.py
+index cd6a52f6af..6e44733040 100644
+--- a/tests/schema/tests.py
++++ b/tests/schema/tests.py
+@@ -10,7 +10,7 @@ from django.db import (
+     DatabaseError, DataError, IntegrityError, OperationalError, connection,
+ )
+ from django.db.models import (
+-    CASCADE, PROTECT, AutoField, BigAutoField, BigIntegerField, BinaryField,
++    CASCADE, PROTECT, SET_NULL, AutoField, BigAutoField, BigIntegerField, BinaryField,
+     BooleanField, CharField, CheckConstraint, DateField, DateTimeField,
+     DecimalField, DurationField, F, FloatField, ForeignKey, ForeignObject,
+     Index, IntegerField, JSONField, ManyToManyField, Model, OneToOneField,
+@@ -531,6 +531,34 @@ class SchemaTests(TransactionTestCase):
+         self.assertEqual(columns['age'][0], connection.features.introspected_field_types['IntegerField'])
+         self.assertTrue(columns['age'][1][6])
+ 
++    def test_add_nullable_unique_field(self):
++        # Nullable unique fields (e.g. nullable OneToOneField) are remade
++        # rather than using ALTER TABLE ADD COLUMN because SQLite doesn't
++        # support adding a UNIQUE column (#33384).
++        with connection.schema_editor() as editor:
++            editor.create_model(Author)
++            editor.create_model(BookWithoutAuthor)
++        new_field = OneToOneField(
++            Author,
++            SET_NULL,
++            blank=True,
++            null=True,
++            related_name='nullable_book',
++        )
++        new_field.set_attributes_from_name('nullable_author')
++        with connection.schema_editor() as editor:
++            editor.add_field(BookWithoutAuthor, new_field)
++        columns = self.column_classes(BookWithoutAuthor)
++        self.assertIn('nullable_author_id', columns)
++        self.assertTrue(columns['nullable_author_id'][1][6])
++        expected_fks = 1 if connection.features.supports_foreign_keys else 0
++        counts = self.get_constraints_count(
++            BookWithoutAuthor._meta.db_table,
++            'nullable_author_id',
++            (Author._meta.db_table, Author._meta.pk.column),
++        )
++        self.assertEqual(counts, {'fks': expected_fks, 'uniques': 1, 'indexes': 0})
++
+     def test_add_field_remove_field(self):
+         """
+         Adding a field and removing it removes all deferred sql referring to it.

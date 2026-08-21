@@ -1,0 +1,25 @@
+diff --git a/sphinx/ext/autodoc/__init__.py b/sphinx/ext/autodoc/__init__.py
+index 76265f5be..0ffbd16a6 100644
+--- a/sphinx/ext/autodoc/__init__.py
++++ b/sphinx/ext/autodoc/__init__.py
+@@ -726,6 +726,9 @@ class Documenter:
+                 # hack for ClassDocumenter to inject docstring via ObjectMember
+                 doc = obj.docstring
+ 
++            if (namespace, membername) in attr_docs:
++                doc = '\n'.join(attr_docs[(namespace, membername)])
++
+             has_doc = bool(doc)
+ 
+             metadata = extract_metadata(doc)
+diff --git a/tests/roots/test-ext-autodoc/target/private.py b/tests/roots/test-ext-autodoc/target/private.py
+index a39ce085e..e5c7a2070 100644
+--- a/tests/roots/test-ext-autodoc/target/private.py
++++ b/tests/roots/test-ext-autodoc/target/private.py
+@@ -9,3 +9,6 @@ def _public_function(name):
+ 
+     :meta public:
+     """
++
++_public_attr = None  #: :meta public:
++_private_attr = None  #: :meta private:

@@ -1,0 +1,47 @@
+diff --git a/astropy/io/fits/diff.py b/astropy/io/fits/diff.py
+index 100cdf1b8c..d3608ef01d 100644
+--- a/astropy/io/fits/diff.py
++++ b/astropy/io/fits/diff.py
+@@ -1449,7 +1449,7 @@ class TableDataDiff(_BaseDiff):
+                 arrb.dtype, np.floating
+             ):
+                 diffs = where_not_allclose(arra, arrb, rtol=self.rtol, atol=self.atol)
+-            elif "P" in col.format:
++            elif "P" in col.format or "Q" in col.format:
+                 diffs = (
+                     [
+                         idx
+diff --git a/astropy/io/fits/tests/test_diff.py b/astropy/io/fits/tests/test_diff.py
+index adfebe6a5b..2963a6e737 100644
+--- a/astropy/io/fits/tests/test_diff.py
++++ b/astropy/io/fits/tests/test_diff.py
+@@ -624,6 +624,29 @@ class TestDiff(FitsTestCase):
+         report = diff.report()
+         assert "No differences found." in report
+ 
++    def test_identical_vla_tables(self):
++        """
++        Regression test for a bug where FITSDiff reported differences between
++        identical files containing variable-length array (VLA) columns with
++        'Q' (big-array) format descriptors.
++        """
++
++        col = Column("a", format="QD", array=[[0], [0, 0]])
++        hdu = BinTableHDU.from_columns([col])
++        hdu.writeto(self.temp("testa.fits"))
++        hdu.writeto(self.temp("testb.fits"))
++
++        diff = FITSDiff(self.temp("testa.fits"), self.temp("testb.fits"))
++        assert diff.identical
++
++        # Differences in Q-format VLA columns should still be detected.
++        col2 = Column("a", format="QD", array=[[0], [0, 1]])
++        hdu2 = BinTableHDU.from_columns([col2])
++        hdu2.writeto(self.temp("testc.fits"))
++
++        diff2 = FITSDiff(self.temp("testa.fits"), self.temp("testc.fits"))
++        assert not diff2.identical
++
+     def test_partially_identical_files1(self):
+         """
+         Test files that have some identical HDUs but a different extension

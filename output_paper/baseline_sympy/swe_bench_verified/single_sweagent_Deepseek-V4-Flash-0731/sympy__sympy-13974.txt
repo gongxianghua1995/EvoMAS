@@ -1,0 +1,73 @@
+diff --git a/sympy/physics/quantum/tensorproduct.py b/sympy/physics/quantum/tensorproduct.py
+index 9dd10d219e..d814f19998 100644
+--- a/sympy/physics/quantum/tensorproduct.py
++++ b/sympy/physics/quantum/tensorproduct.py
+@@ -345,6 +345,34 @@ def tensor_product_simp_Mul(e):
+         return e
+ 
+ 
++def tensor_product_simp_Pow(e):
++    """Simplify a Pow with a TensorProduct base.
++
++    This simply distributes the exponent over the tensor product. For example,
++    ``TensorProduct(A, B)**2`` becomes ``TensorProduct(A**2, B**2)``.
++
++    Examples
++    ========
++
++    >>> from sympy.physics.quantum.tensorproduct import \
++                tensor_product_simp_Pow, TensorProduct
++    >>> from sympy import Symbol
++    >>> A = Symbol('A',commutative=False)
++    >>> B = Symbol('B',commutative=False)
++    >>> e = TensorProduct(A, B)**2
++    >>> tensor_product_simp_Pow(e)
++    (A**2)x(B**2)
++
++    """
++    if isinstance(e, Pow):
++        base = tensor_product_simp(e.base)
++        if isinstance(base, TensorProduct):
++            return TensorProduct(*[arg ** e.exp for arg in base.args])
++        else:
++            return base ** e.exp
++    return e
++
++
+ def tensor_product_simp(e, **hints):
+     """Try to simplify and combine TensorProducts.
+ 
+@@ -376,13 +404,13 @@ def tensor_product_simp(e, **hints):
+     commutators and anticommutators as well:
+ 
+     >>> tensor_product_simp(e**2)
+-    (A*C)x(B*D)**2
++    ((A*C)**2)x((B*D)**2)
+ 
+     """
+     if isinstance(e, Add):
+         return Add(*[tensor_product_simp(arg) for arg in e.args])
+     elif isinstance(e, Pow):
+-        return tensor_product_simp(e.base) ** e.exp
++        return tensor_product_simp_Pow(e)
+     elif isinstance(e, Mul):
+         return tensor_product_simp_Mul(e)
+     elif isinstance(e, Commutator):
+diff --git a/sympy/physics/quantum/tests/test_tensorproduct.py b/sympy/physics/quantum/tests/test_tensorproduct.py
+index 9f65844c85..a5730ba9b4 100644
+--- a/sympy/physics/quantum/tests/test_tensorproduct.py
++++ b/sympy/physics/quantum/tests/test_tensorproduct.py
+@@ -49,6 +49,13 @@ def test_tensor_product_simp():
+     assert tensor_product_simp(TP(A, B)*TP(B, C)) == TP(A*B, B*C)
+ 
+ 
++def test_tensor_product_simp_pow():
++    assert tensor_product_simp(TP(A, B)**2) == TP(A**2, B**2)
++    assert tensor_product_simp(TP(A, B)*TP(A, B)) == TP(A**2, B**2)
++    # Commutative scalars are pulled out of the tensor product.
++    assert tensor_product_simp(TP(1, A)**2) == TP(1, A**2)
++
++
+ def test_issue_5923():
+     # most of the issue regarding sympification of args has been handled
+     # and is tested internally by the use of args_cnc through the quantum

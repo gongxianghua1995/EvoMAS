@@ -1,0 +1,41 @@
+diff --git a/sympy/core/function.py b/sympy/core/function.py
+index 1b8005e1d2..b4aa518328 100644
+--- a/sympy/core/function.py
++++ b/sympy/core/function.py
+@@ -507,7 +507,12 @@ def _eval_evalf(self, prec):
+             func = getattr(mpmath, fname)
+         except (AttributeError, KeyError):
+             try:
+-                return Float(self._imp_(*self.args), prec)
++                # Evaluate the arguments recursively first; they may
++                # themselves contain implemented functions (see issue #12096).
++                args = [arg._eval_evalf(prec) for arg in self.args]
++                if any(a is None for a in args):
++                    return
++                return Float(self._imp_(*args), prec)
+             except (AttributeError, TypeError, ValueError):
+                 return
+ 
+diff --git a/sympy/core/tests/test_function.py b/sympy/core/tests/test_function.py
+index 0288a80c46..48037950f2 100644
+--- a/sympy/core/tests/test_function.py
++++ b/sympy/core/tests/test_function.py
+@@ -344,6 +344,18 @@ def eq(a, b, eps):
+     assert eq(cos(100).evalf(15), Float("0.86231887228768"), 1e-13)
+ 
+ 
++def test_function_evalf_implemented_function_nested():
++    # Issue #12096: evalf() should recursively evaluate the result of
++    # _imp_ so that compositions of implemented functions evaluate.
++    from sympy.utilities.lambdify import implemented_function
++    f = implemented_function('f', lambda x: x**2)
++    g = implemented_function('g', lambda x: 2*x)
++    assert f(2).evalf() == 4
++    assert g(2).evalf() == 4
++    assert f(g(2)).evalf() == 16
++    assert f(g(f(2))).evalf() == 64
++
++
+ def test_extensibility_eval():
+     class MyFunc(Function):
+         @classmethod

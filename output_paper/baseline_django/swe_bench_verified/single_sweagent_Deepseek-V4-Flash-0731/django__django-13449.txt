@@ -1,0 +1,74 @@
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+index 90d90119d0..4564c80439 100644
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -1253,7 +1253,7 @@ class OrderBy(BaseExpression):
+         self.descending = True
+ 
+ 
+-class Window(Expression):
++class Window(SQLiteNumericMixin, Expression):
+     template = '%(expression)s OVER (%(window)s)'
+     # Although the main expression may either be an aggregate or an
+     # expression with an aggregate function, the GROUP BY that will
+@@ -1332,6 +1332,15 @@ class Window(Expression):
+             'window': ''.join(window_sql).strip()
+         }, params
+ 
++    def as_sqlite(self, compiler, connection):
++        if isinstance(self.output_field, fields.DecimalField):
++            copy = self.copy()
++            source_expressions = copy.get_source_expressions()
++            source_expressions[0].output_field = fields.FloatField()
++            copy.set_source_expressions(source_expressions)
++            return super(Window, copy).as_sqlite(compiler, connection)
++        return self.as_sql(compiler, connection)
++
+     def __str__(self):
+         return '{} OVER ({}{}{})'.format(
+             str(self.source_expression),
+diff --git a/tests/expressions_window/tests.py b/tests/expressions_window/tests.py
+index 30ed64f529..ee261c46bd 100644
+--- a/tests/expressions_window/tests.py
++++ b/tests/expressions_window/tests.py
+@@ -1,10 +1,11 @@
+ import datetime
++from decimal import Decimal
+ from unittest import mock, skipIf
+ 
+ from django.core.exceptions import FieldError
+ from django.db import NotSupportedError, connection
+ from django.db.models import (
+-    Avg, BooleanField, Case, F, Func, Max, Min, OuterRef, Q, RowRange,
++    Avg, BooleanField, Case, DecimalField, F, Func, Max, Min, OuterRef, Q, RowRange,
+     Subquery, Sum, Value, ValueRange, When, Window, WindowFrame,
+ )
+ from django.db.models.functions import (
+@@ -202,6 +203,27 @@ class WindowFunctionTests(TestCase):
+             ('Smith', 55000, 'Sales', 53000),
+         ], transform=lambda row: (row.name, row.salary, row.department, row.lag))
+ 
++    def test_lag_decimalfield(self):
++        qs = Employee.objects.annotate(lag=Window(
++            expression=Lag('salary', output_field=DecimalField(max_digits=7, decimal_places=2)),
++            partition_by=F('department'),
++            order_by=[F('salary').asc(), F('name').asc()],
++        )).order_by('department', F('salary').asc(), F('name').asc())
++        self.assertQuerysetEqual(qs, [
++            ('Williams', 37000, 'Accounting', None),
++            ('Jenson', 45000, 'Accounting', Decimal('37000.00')),
++            ('Jones', 45000, 'Accounting', Decimal('45000.00')),
++            ('Adams', 50000, 'Accounting', Decimal('45000.00')),
++            ('Moore', 34000, 'IT', None),
++            ('Wilkinson', 60000, 'IT', Decimal('34000.00')),
++            ('Johnson', 80000, 'Management', None),
++            ('Miller', 100000, 'Management', Decimal('80000.00')),
++            ('Smith', 38000, 'Marketing', None),
++            ('Johnson', 40000, 'Marketing', Decimal('38000.00')),
++            ('Brown', 53000, 'Sales', None),
++            ('Smith', 55000, 'Sales', Decimal('53000.00')),
++        ], transform=lambda row: (row.name, row.salary, row.department, row.lag))
++
+     def test_first_value(self):
+         qs = Employee.objects.annotate(first_value=Window(
+             expression=FirstValue('salary'),

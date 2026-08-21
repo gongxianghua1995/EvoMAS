@@ -1,0 +1,52 @@
+diff --git a/django/db/migrations/autodetector.py b/django/db/migrations/autodetector.py
+index bf9c2acd26..f1238a3504 100644
+--- a/django/db/migrations/autodetector.py
++++ b/django/db/migrations/autodetector.py
+@@ -824,7 +824,7 @@ class MigrationAutodetector:
+         for app_label, model_name, field_name in sorted(self.new_field_keys - self.old_field_keys):
+             old_model_name = self.renamed_models.get((app_label, model_name), model_name)
+             old_model_state = self.from_state.models[app_label, old_model_name]
+-            new_model_state = self.to_state.models[app_label, old_model_name]
++            new_model_state = self.to_state.models[app_label, model_name]
+             field = new_model_state.get_field(field_name)
+             # Scan to see if this is actually a rename!
+             field_dec = self.deep_deconstruct(field)
+diff --git a/tests/migrations/test_autodetector.py b/tests/migrations/test_autodetector.py
+index bb37af24e3..52c69a4a40 100644
+--- a/tests/migrations/test_autodetector.py
++++ b/tests/migrations/test_autodetector.py
+@@ -1128,6 +1128,34 @@ class AutodetectorTests(TestCase):
+         self.assertOperationTypes(changes, 'otherapp', 0, ["RenameField"])
+         self.assertOperationAttributes(changes, 'otherapp', 0, 0, old_name="author", new_name="writer")
+ 
++    def test_rename_model_with_renamed_field(self):
++        """
++        Tests autodetection of renamed models while simultaneously renaming one
++        of the fields on the renamed model itself.
++        """
++        changes = self.get_changes(
++            [
++                ModelState("testapp", "MyModel", [
++                    ("id", models.AutoField(primary_key=True)),
++                    ("my_field", models.IntegerField()),
++                ]),
++            ],
++            [
++                ModelState("testapp", "MyModel2", [
++                    ("id", models.AutoField(primary_key=True)),
++                    ("my_field2", models.IntegerField()),
++                ]),
++            ],
++            MigrationQuestioner({"ask_rename": True, "ask_rename_model": True}),
++        )
++        # Right number/type of migrations?
++        self.assertNumberMigrations(changes, "testapp", 1)
++        self.assertOperationTypes(changes, "testapp", 0, ["RenameModel", "RenameField"])
++        self.assertOperationAttributes(changes, "testapp", 0, 0, old_name="MyModel", new_name="MyModel2")
++        self.assertOperationAttributes(
++            changes, "testapp", 0, 1, model_name="mymodel2", old_name="my_field", new_name="my_field2",
++        )
++
+     def test_rename_model_with_fks_in_different_position(self):
+         """
+         #24537 - The order of fields in a model does not influence

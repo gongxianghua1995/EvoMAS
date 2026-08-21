@@ -1,0 +1,80 @@
+diff --git a/astropy/utils/misc.py b/astropy/utils/misc.py
+index de3fb01d18..e8cc24fa32 100644
+--- a/astropy/utils/misc.py
++++ b/astropy/utils/misc.py
+@@ -496,9 +496,9 @@ def did_you_mean(s, candidates, n=3, cutoff=0.8, fix=None):
+ 
+ class InheritDocstrings(type):
+     """
+-    This metaclass makes methods of a class automatically have their
+-    docstrings filled in from the methods they override in the base
+-    class.
++    This metaclass makes methods and properties of a class automatically
++    have their docstrings filled in from the methods/properties they
++    override in the base class.
+ 
+     If the class uses multiple inheritance, the docstring will be
+     chosen from the first class in the bases list, in the same way as
+@@ -520,7 +520,7 @@ class InheritDocstrings(type):
+         u'Wiggle the thingamajig'
+     """
+ 
+-    def __init__(cls, name, bases, dct):
++    def __new__(cls, name, bases, dct):
+         def is_public_member(key):
+             return (
+                 (key.startswith('__') and key.endswith('__')
+@@ -528,16 +528,20 @@ class InheritDocstrings(type):
+                 not key.startswith('_'))
+ 
+         for key, val in dct.items():
+-            if (inspect.isfunction(val) and
+-                is_public_member(key) and
+-                val.__doc__ is None):
+-                for base in cls.__mro__[1:]:
++            if (is_public_member(key) and
++                ((inspect.isfunction(val) and val.__doc__ is None) or
++                 (isinstance(val, property) and val.__doc__ is None))):
++                for base in bases:
+                     super_method = getattr(base, key, None)
+                     if super_method is not None:
+-                        val.__doc__ = super_method.__doc__
++                        if isinstance(val, property):
++                            dct[key] = property(val.fget, val.fset, val.fdel,
++                                                super_method.__doc__)
++                        else:
++                            val.__doc__ = super_method.__doc__
+                         break
+ 
+-        super().__init__(name, bases, dct)
++        return super().__new__(cls, name, bases, dct)
+ 
+ 
+ class OrderedDescriptor(metaclass=abc.ABCMeta):
+diff --git a/astropy/utils/tests/test_misc.py b/astropy/utils/tests/test_misc.py
+index 4f632e8d15..61337740d7 100644
+--- a/astropy/utils/tests/test_misc.py
++++ b/astropy/utils/tests/test_misc.py
+@@ -89,6 +89,22 @@ def test_inherit_docstrings():
+         assert Subclass.__call__.__doc__ == "FOO"
+ 
+ 
++def test_inherit_docstrings_property():
++    class Base(metaclass=misc.InheritDocstrings):
++        @property
++        def wiggle(self):
++            "Wiggle the thingamajig"
++            pass
++
++    class Subclass(Base):
++        @property
++        def wiggle(self):
++            pass
++
++    if Base.wiggle.__doc__ is not None:
++        assert Subclass.wiggle.__doc__ == "Wiggle the thingamajig"
++
++
+ def test_set_locale():
+     # First, test if the required locales are available
+     current = locale.setlocale(locale.LC_ALL)

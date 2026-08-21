@@ -1,0 +1,40 @@
+diff --git a/django/contrib/sitemaps/__init__.py b/django/contrib/sitemaps/__init__.py
+index 27756d9d96..2f78e69322 100644
+--- a/django/contrib/sitemaps/__init__.py
++++ b/django/contrib/sitemaps/__init__.py
+@@ -167,7 +167,9 @@ class Sitemap:
+             return None
+         if callable(self.lastmod):
+             try:
+-                return max([self.lastmod(item) for item in self.items()])
++                return max(
++                    [self.lastmod(item) for item in self.items()], default=None
++                )
+             except TypeError:
+                 return None
+         else:
+diff --git a/tests/sitemaps_tests/test_http.py b/tests/sitemaps_tests/test_http.py
+index 4a269b8737..22a2f1060d 100644
+--- a/tests/sitemaps_tests/test_http.py
++++ b/tests/sitemaps_tests/test_http.py
+@@ -247,6 +247,20 @@ class HTTPSitemapTests(SitemapTestsBase):
+         response = self.client.get("/lastmod/latest-lastmod-timezone-sitemap.xml")
+         self.assertContains(response, "<lastmod>2013-03-13T10:00:00-05:00</lastmod>")
+ 
++    def test_sitemap_get_latest_lastmod_empty(self):
++        """
++        sitemapindex.lastmod is omitted when Sitemap.lastmod is callable
++        and Sitemap.items() is empty.
++        """
++        class EmptySitemap(Sitemap):
++            def items(self):
++                return []
++
++            def lastmod(self, item):
++                return date(2013, 3, 13)
++
++        self.assertIsNone(EmptySitemap().get_latest_lastmod())
++
+     def test_localized_priority(self):
+         """The priority value should not be localized."""
+         with translation.override("fr"):

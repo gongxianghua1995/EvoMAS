@@ -1,0 +1,37 @@
+diff --git a/sphinx/builders/gettext.py b/sphinx/builders/gettext.py
+index e8bc547b7..387099424 100644
+--- a/sphinx/builders/gettext.py
++++ b/sphinx/builders/gettext.py
+@@ -3,7 +3,7 @@
+ from codecs import open
+ from collections import OrderedDict, defaultdict
+ from datetime import datetime, timedelta, tzinfo
+-from os import getenv, path, walk
++from os import getcwd, getenv, path, walk
+ from time import time
+ from typing import Any, DefaultDict, Dict, Generator, Iterable, List, Set, Tuple, Union
+ from uuid import uuid4
+@@ -32,7 +32,8 @@ class Message:
+     """An entry of translatable message."""
+     def __init__(self, text: str, locations: List[Tuple[str, int]], uuids: List[str]):
+         self.text = text
+-        self.locations = locations
++        # remove duplicated locations
++        self.locations = list(dict.fromkeys(locations))
+         self.uuids = uuids
+ 
+ 
+@@ -57,8 +58,13 @@ class Catalog:
+ 
+     def __iter__(self) -> Generator[Message, None, None]:
+         for message in self.messages:
+-            positions = [(source, line) for source, line, uuid in self.metadata[message]]
+-            uuids = [uuid for source, line, uuid in self.metadata[message]]
++            positions = list(dict.fromkeys(
++                (relpath(source, start=getcwd()), line)
++                for source, line, uuid in self.metadata[message]
++            ))
++            uuids = list(dict.fromkeys(
++                uuid for source, line, uuid in self.metadata[message]
++            ))
+             yield Message(message, positions, uuids)

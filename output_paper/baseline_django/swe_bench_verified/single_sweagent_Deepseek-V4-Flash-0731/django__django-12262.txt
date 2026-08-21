@@ -1,0 +1,59 @@
+diff --git a/django/template/library.py b/django/template/library.py
+index 20bc86dac8..2f74556268 100644
+--- a/django/template/library.py
++++ b/django/template/library.py
+@@ -261,7 +261,7 @@ def parse_bits(parser, bits, params, varargs, varkw, defaults,
+         if kwarg:
+             # The kwarg was successfully extracted
+             param, value = kwarg.popitem()
+-            if param not in params and param not in unhandled_kwargs and varkw is None:
++            if param not in params and param not in kwonly and varkw is None:
+                 # An unexpected keyword argument was supplied
+                 raise TemplateSyntaxError(
+                     "'%s' received unexpected keyword argument '%s'" %
+diff --git a/repro_tags.py b/repro_tags.py
+new file mode 100644
+index 0000000000..de7088d42b
+--- /dev/null
++++ b/repro_tags.py
+@@ -0,0 +1,10 @@
++from django import template
++register = template.Library()
++
++@register.simple_tag
++def hello(*, greeting='hello'):
++    return f'{greeting} world'
++
++@register.simple_tag
++def hi(*, greeting):
++    return f'{greeting} world'
+diff --git a/repro_test_tmp.py b/repro_test_tmp.py
+new file mode 100644
+index 0000000000..5734dfc133
+--- /dev/null
++++ b/repro_test_tmp.py
+@@ -0,0 +1,24 @@
++import django
++from django.conf import settings
++settings.configure(TEMPLATES=[{
++    'BACKEND': 'django.template.backends.django.DjangoTemplates',
++}])
++django.setup()
++
++from django import template
++
++register = template.Library()
++
++@register.simple_tag
++def hello(*, greeting='hello'):
++    return f'{greeting} world'
++
++@register.simple_tag
++def hi(*, greeting):
++    return f'{greeting} world'
++
++t = template.Template('{% load repro %}{% hello greeting="hi" %}')
++print("Test 1 output:", t.render(template.Context({})))
++
++t2 = template.Template('{% load repro %}{% hi greeting="hi" greeting="hello" %}')
++print("Test 2 output:", t2.render(template.Context({})))

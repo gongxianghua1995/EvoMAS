@@ -1,0 +1,110 @@
+diff --git a/sphinx/ext/autodoc/__init__.py b/sphinx/ext/autodoc/__init__.py
+index f8e4be999..fb983be53 100644
+--- a/sphinx/ext/autodoc/__init__.py
++++ b/sphinx/ext/autodoc/__init__.py
+@@ -1036,15 +1036,10 @@ class DocstringSignatureMixin:
+     Mixin for FunctionDocumenter and MethodDocumenter to provide the
+     feature of reading the signature from the docstring.
+     """
+-
+-    def _find_signature(self, encoding: str = None) -> Tuple[str, str]:
+-        if encoding is not None:
+-            warnings.warn("The 'encoding' argument to autodoc.%s._find_signature() is "
+-                          "deprecated." % self.__class__.__name__,
+-                          RemovedInSphinx40Warning, stacklevel=2)
++    def _find_signature_lines(self) -> List[str]:
+         docstrings = self.get_doc()
+         self._new_docstrings = docstrings[:]
+-        result = None
++        sig_lines = []
+         for i, doclines in enumerate(docstrings):
+             # no lines in docstring, no match
+             if not doclines:
+@@ -1062,14 +1057,38 @@ class DocstringSignatureMixin:
+                     valid_names.extend(cls.__name__ for cls in self.object.__mro__)
+             if base not in valid_names:
+                 continue
++
++            # collect all consecutive signature lines
++            j = 0
++            while j < len(doclines):
++                sig_match = py_ext_sig_re.match(doclines[j])
++                if not sig_match:
++                    break
++                _exmod, _path, _base, _args, _retann = sig_match.groups()
++                if _base not in valid_names:
++                    break
++                sig_lines.append(doclines[j])
++                j += 1
++
+             # re-prepare docstring to ignore more leading indentation
+             tab_width = self.directive.state.document.settings.tab_width  # type: ignore
+-            self._new_docstrings[i] = prepare_docstring('\n'.join(doclines[1:]),
++            self._new_docstrings[i] = prepare_docstring('\n'.join(doclines[j:]),
+                                                         tabsize=tab_width)
+-            result = args, retann
+             # don't look any further
+             break
+-        return result
++        return sig_lines
++
++    def _find_signature(self, encoding: str = None) -> Tuple[str, str]:
++        if encoding is not None:
++            warnings.warn("The 'encoding' argument to autodoc.%s._find_signature() is "
++                          "deprecated." % self.__class__.__name__,
++                          RemovedInSphinx40Warning, stacklevel=2)
++        sig_lines = self._find_signature_lines()
++        if sig_lines:
++            match = py_ext_sig_re.match(sig_lines[0])
++            _exmod, _path, _base, args, retann = match.groups()
++            return args, retann
++        return None
+ 
+     def get_doc(self, encoding: str = None, ignore: int = None) -> List[List[str]]:
+         if encoding is not None:
+@@ -1085,9 +1104,23 @@ class DocstringSignatureMixin:
+         if self.args is None and self.env.config.autodoc_docstring_signature:  # type: ignore
+             # only act if a signature is not explicitly given already, and if
+             # the feature is enabled
+-            result = self._find_signature()
+-            if result is not None:
+-                self.args, self.retann = result
++            sig_lines = self._find_signature_lines()
++            if len(sig_lines) > 1:
++                # multiple signatures in the docstring; format each of them
++                signatures = []
++                for sig_line in sig_lines:
++                    match = py_ext_sig_re.match(sig_line)
++                    self.args = match.group(4)
++                    self.retann = match.group(5)
++                    signatures.append(super().format_signature(**kwargs))  # type: ignore
++                # restore the state for Documenter.format_signature()
++                self.args = None
++                self.retann = None
++                return '\n'.join(signatures)
++            elif sig_lines:
++                match = py_ext_sig_re.match(sig_lines[0])
++                self.args = match.group(4)
++                self.retann = match.group(5)
+         return super().format_signature(**kwargs)  # type: ignore
+ 
+ 
+diff --git a/tests/roots/test-ext-autodoc/target/__init__.py b/tests/roots/test-ext-autodoc/target/__init__.py
+index b6684ee85..6587fdc95 100644
+--- a/tests/roots/test-ext-autodoc/target/__init__.py
++++ b/tests/roots/test-ext-autodoc/target/__init__.py
+@@ -129,6 +129,14 @@ First line of docstring
+             indented line
+         """
+ 
++    def meth3(self):
++        """meth3(FOO, BAR=1) -> BAZ
++meth3(QUX) -> QUUX
++
++First line of docstring
++rest of docstring
++        """
++
+     @property
+     def prop1(self):
+         """DocstringSig.prop1(self)

@@ -1,0 +1,63 @@
+diff --git a/django/core/servers/basehttp.py b/django/core/servers/basehttp.py
+index 14dab517c9..30aab97482 100644
+--- a/django/core/servers/basehttp.py
++++ b/django/core/servers/basehttp.py
+@@ -16,6 +16,7 @@ from wsgiref import simple_server
+ from django.core.exceptions import ImproperlyConfigured
+ from django.core.handlers.wsgi import LimitedStream
+ from django.core.wsgi import get_wsgi_application
++from django.db import connections
+ from django.utils.module_loading import import_string
+ 
+ __all__ = ('WSGIServer', 'WSGIRequestHandler')
+@@ -81,6 +82,11 @@ class ThreadedWSGIServer(socketserver.ThreadingMixIn, WSGIServer):
+     """A threaded version of the WSGIServer"""
+     daemon_threads = True
+ 
++    def close_request(self, request):
++        """Called to clean up an individual request."""
++        connections.close_all()
++        super().close_request(request)
++
+ 
+ class ServerHandler(simple_server.ServerHandler):
+     http_version = '1.1'
+diff --git a/tests/servers/test_liveserverthread.py b/tests/servers/test_liveserverthread.py
+index 09b6ca08c8..1673d9e340 100644
+--- a/tests/servers/test_liveserverthread.py
++++ b/tests/servers/test_liveserverthread.py
+@@ -1,3 +1,5 @@
++from unittest import mock
++
+ from django.db import DEFAULT_DB_ALIAS, connections
+ from django.test import LiveServerTestCase, TransactionTestCase
+ from django.test.testcases import LiveServerThread
+@@ -45,3 +47,28 @@ class LiveServerThreadTest(TransactionTestCase):
+         thread = MyServerTestCase._create_server_thread(None)
+         server = thread._create_server()
+         self.assertIs(type(server), FakeServer)
++
++
++class ThreadedWSGIServerTest(TransactionTestCase):
++
++    available_apps = []
++
++    def test_close_request_closes_connections(self):
++        from django.core.servers.basehttp import ThreadedWSGIServer
++        from django.test.testcases import QuietWSGIRequestHandler
++
++        class FakeRequest:
++            def close(self):
++                pass
++
++        server = ThreadedWSGIServer(
++            ('localhost', 0), QuietWSGIRequestHandler, allow_reuse_address=False,
++        )
++        try:
++            conn = mock.Mock()
++            connections[DEFAULT_DB_ALIAS] = conn
++            server.close_request(FakeRequest())
++            conn.close.assert_called_once_with()
++        finally:
++            del connections[DEFAULT_DB_ALIAS]
++            server.server_close()

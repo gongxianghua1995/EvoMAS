@@ -1,0 +1,97 @@
+diff --git a/sphinx/ext/napoleon/__init__.py b/sphinx/ext/napoleon/__init__.py
+index 10b1ff3a3..4b0936fe7 100644
+--- a/sphinx/ext/napoleon/__init__.py
++++ b/sphinx/ext/napoleon/__init__.py
+@@ -430,15 +430,12 @@ def _skip_member(app: Sphinx, what: str, name: str, obj: Any,
+             cls_path, _, _ = qualname.rpartition('.')
+             if cls_path:
+                 try:
+-                    if '.' in cls_path:
+-                        import importlib
+-                        import functools
+-
+-                        mod = importlib.import_module(obj.__module__)
+-                        mod_path = cls_path.split('.')
+-                        cls = functools.reduce(getattr, mod_path, mod)
+-                    else:
+-                        cls = obj.__globals__[cls_path]
++                    import importlib
++                    import functools
++
++                    mod = importlib.import_module(obj.__module__)
++                    mod_path = cls_path.split('.')
++                    cls = functools.reduce(getattr, mod_path, mod)
+                 except Exception:
+                     cls_is_owner = False
+                 else:
+diff --git a/tests/test_ext_napoleon.py b/tests/test_ext_napoleon.py
+index 7c3379757..d124a3831 100644
+--- a/tests/test_ext_napoleon.py
++++ b/tests/test_ext_napoleon.py
+@@ -10,6 +10,7 @@
+ """
+ 
+ import sys
++import types
+ from collections import namedtuple
+ from unittest import TestCase, mock
+ 
+@@ -205,3 +206,58 @@ class SkipMemberTest(TestCase):
+     def test_module_special_undoc(self):
+         self.assertSkip('module', '__special_undoc__', __special_undoc__, True,
+                         'napoleon_include_special_with_doc')
++
++    def test_class_decorated_init_with_doc(self):
++        # A decorated __init__ should still be recognized as a member of the
++        # class (refs: #3906, #5498)
++        import functools
++        module = types.ModuleType('decorated_module')
++        module.__dict__.update(functools=functools)
++        exec("""
++def decorated_init(func):
++    @functools.wraps(func)
++    def wrapper(*args, **kwargs):
++        return func(*args, **kwargs)
++    return wrapper
++""", module.__dict__)
++
++        class SampleClass2:
++            @module.decorated_init
++            def __init__(self):
++                """Docs."""
++                pass
++
++        app = mock.Mock()
++        app.config = Config()
++        app.config.napoleon_include_init_with_doc = True
++        self.assertIs(False,
++                      _skip_member(app, 'class', '__init__',
++                                   SampleClass2.__init__, True, mock.Mock()))
++
++    def test_class_decorated_class_with_doc(self):
++        # A decorated (nested) class member should also be recognized as a
++        # member of the class (refs: #3906, #5498)
++        import functools
++        module = types.ModuleType('decorated_module')
++        module.__dict__.update(functools=functools)
++        exec("""
++def decorated_init(func):
++    @functools.wraps(func)
++    def wrapper(*args, **kwargs):
++        return func(*args, **kwargs)
++    return wrapper
++""", module.__dict__)
++
++        class SampleClass2:
++            @module.decorated_init
++            class __special_nested__:
++                """Docs."""
++                pass
++
++        app = mock.Mock()
++        app.config = Config()
++        app.config.napoleon_include_special_with_doc = True
++        self.assertIs(False,
++                      _skip_member(app, 'class', '__special_nested__',
++                                   SampleClass2.__special_nested__, True,
++                                   mock.Mock()))

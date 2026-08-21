@@ -1,0 +1,45 @@
+diff --git a/django/contrib/staticfiles/storage.py b/django/contrib/staticfiles/storage.py
+index f957a667b2..720767aa9e 100644
+--- a/django/contrib/staticfiles/storage.py
++++ b/django/contrib/staticfiles/storage.py
+@@ -261,6 +261,7 @@ class HashedFilesMixin:
+ 
+         paths = {path: paths[path] for path in adjustable_paths}
+ 
++        substitutions = False
+         for i in range(self.max_post_process_passes):
+             substitutions = False
+             for name, hashed_name, processed, subst in self._post_process(paths, adjustable_paths, hashed_files):
+diff --git a/tests/staticfiles_tests/storage.py b/tests/staticfiles_tests/storage.py
+index 79f406ca6c..3099f3baaf 100644
+--- a/tests/staticfiles_tests/storage.py
++++ b/tests/staticfiles_tests/storage.py
+@@ -97,3 +97,7 @@ class ExtraPatternsStorage(ManifestStaticFilesStorage):
+ class NoneHashStorage(ManifestStaticFilesStorage):
+     def file_hash(self, name, content=None):
+         return None
++
++
++class NoPostProcessStorage(ManifestStaticFilesStorage):
++    max_post_process_passes = 0
+diff --git a/tests/staticfiles_tests/test_storage.py b/tests/staticfiles_tests/test_storage.py
+index db655f2453..9e06d8ae97 100644
+--- a/tests/staticfiles_tests/test_storage.py
++++ b/tests/staticfiles_tests/test_storage.py
+@@ -454,6 +454,16 @@ class TestCollectionManifestStorage(TestHashedFiles, CollectionTestCase):
+         )
+ 
+ 
++@override_settings(STATICFILES_STORAGE='staticfiles_tests.storage.NoPostProcessStorage')
++class TestCollectionNoPostProcessStorage(CollectionTestCase):
++    def test_collectstatic_no_post_process(self):
++        """
++        No crash with max_post_process_passes set to 0 (#33134).
++        """
++        err = StringIO()
++        call_command('collectstatic', interactive=False, verbosity=0, stderr=err)
++
++
+ @override_settings(STATICFILES_STORAGE='staticfiles_tests.storage.NoneHashStorage')
+ class TestCollectionNoneHashStorage(CollectionTestCase):
+     hashed_file_path = hashed_file_path

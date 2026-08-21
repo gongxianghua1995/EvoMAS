@@ -1,0 +1,45 @@
+diff --git a/sympy/core/basic.py b/sympy/core/basic.py
+index db4e971848..deb0117d7f 100644
+--- a/sympy/core/basic.py
++++ b/sympy/core/basic.py
+@@ -313,10 +313,10 @@ def __eq__(self, other):
+             try:
+                 other = _sympify(other)
+             except SympifyError:
+-                return False    # sympy != other
++                return NotImplemented    # sympy != other
+ 
+             if type(self) != type(other):
+-                return False
++                return NotImplemented
+ 
+         return self._hashable_content() == other._hashable_content()
+ 
+@@ -329,7 +329,12 @@ def __ne__(self, other):
+ 
+            but faster
+         """
+-        return not self.__eq__(other)
++        result = self.__eq__(other)
++
++        if result is NotImplemented:
++            return result
++
++        return not result
+ 
+     def dummy_eq(self, other, symbol=None):
+         """
+@@ -1180,7 +1185,12 @@ def _has(self, pattern):
+ 
+     def _has_matcher(self):
+         """Helper for .has()"""
+-        return self.__eq__
++        def eq(expr):
++            result = self.__eq__(expr)
++            if result is NotImplemented:
++                return False
++            return result
++        return eq
+ 
+     def replace(self, query, value, map=False, simultaneous=True, exact=False):
+         """

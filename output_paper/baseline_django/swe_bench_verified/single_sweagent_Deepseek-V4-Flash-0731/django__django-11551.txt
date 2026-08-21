@@ -1,0 +1,113 @@
+diff --git a/django/contrib/admin/checks.py b/django/contrib/admin/checks.py
+index f82c20c2f1..9fd77b5d41 100644
+--- a/django/contrib/admin/checks.py
++++ b/django/contrib/admin/checks.py
+@@ -720,33 +720,33 @@ class ModelAdminChecks(BaseModelAdminChecks):
+             return []
+         elif hasattr(obj, item):
+             return []
+-        elif hasattr(obj.model, item):
++        else:
+             try:
+                 field = obj.model._meta.get_field(item)
+             except FieldDoesNotExist:
+-                return []
+-            else:
+-                if isinstance(field, models.ManyToManyField):
++                try:
++                    field = getattr(obj.model, item)
++                except AttributeError:
+                     return [
+                         checks.Error(
+-                            "The value of '%s' must not be a ManyToManyField." % label,
++                            "The value of '%s' refers to '%s', which is not a callable, "
++                            "an attribute of '%s', or an attribute or method on '%s.%s'." % (
++                                label, item, obj.__class__.__name__,
++                                obj.model._meta.app_label, obj.model._meta.object_name,
++                            ),
+                             obj=obj.__class__,
+-                            id='admin.E109',
++                            id='admin.E108',
+                         )
+                     ]
+-                return []
+-        else:
+-            return [
+-                checks.Error(
+-                    "The value of '%s' refers to '%s', which is not a callable, "
+-                    "an attribute of '%s', or an attribute or method on '%s.%s'." % (
+-                        label, item, obj.__class__.__name__,
+-                        obj.model._meta.app_label, obj.model._meta.object_name,
+-                    ),
+-                    obj=obj.__class__,
+-                    id='admin.E108',
+-                )
+-            ]
++            if isinstance(field, models.ManyToManyField):
++                return [
++                    checks.Error(
++                        "The value of '%s' must not be a ManyToManyField." % label,
++                        obj=obj.__class__,
++                        id='admin.E109',
++                    )
++                ]
++            return []
+ 
+     def _check_list_display_links(self, obj):
+         """ Check that list_display_links is a unique subset of list_display.
+diff --git a/tests/modeladmin/models.py b/tests/modeladmin/models.py
+index c0d3c772c9..d7b4730f35 100644
+--- a/tests/modeladmin/models.py
++++ b/tests/modeladmin/models.py
+@@ -34,6 +34,24 @@ class Concert(models.Model):
+     ), blank=True)
+ 
+ 
++class CustomField(models.Field):
++    """A custom field accessible only on model instances."""
++
++    def __get__(self, instance, owner):
++        if instance is None:
++            raise AttributeError('This field can only be accessed on instances.')
++        return instance.__dict__[self.name]
++
++    def contribute_to_class(self, cls, name, private_only=False):
++        super().contribute_to_class(cls, name, private_only=private_only)
++        # Replace the DeferredAttribute set by the parent with this field's
++        # descriptor so accessing it on the model class raises AttributeError.
++        setattr(cls, name, self)
++
++    def db_type(self, connection):
++        return 'custom'
++
++
+ class ValidationTestModel(models.Model):
+     name = models.CharField(max_length=100)
+     slug = models.SlugField()
+@@ -45,6 +63,7 @@ class ValidationTestModel(models.Model):
+     best_friend = models.OneToOneField(User, models.CASCADE, related_name='best_friend')
+     # This field is intentionally 2 characters long (#16080).
+     no = models.IntegerField(verbose_name="Number", blank=True, null=True)
++    custom_field = CustomField()
+ 
+     def decade_published_in(self):
+         return self.pub_date.strftime('%Y')[:3] + "0's"
+diff --git a/tests/modeladmin/test_checks.py b/tests/modeladmin/test_checks.py
+index a1b7001f68..55d2f73306 100644
+--- a/tests/modeladmin/test_checks.py
++++ b/tests/modeladmin/test_checks.py
+@@ -509,6 +509,15 @@ class ListDisplayTests(CheckTestCase):
+ 
+         self.assertIsValid(TestModelAdmin, ValidationTestModel)
+ 
++    def test_field_accessible_via_instance_only(self):
++        class TestModelAdmin(ModelAdmin):
++            list_display = ('custom_field',)
++
++        # A field that raises AttributeError when accessed on the model class
++        # (e.g. PositionField) must still be considered valid as long as it can
++        # be retrieved via model._meta.get_field().
++        self.assertIsValid(TestModelAdmin, ValidationTestModel)
++
+ 
+ class ListDisplayLinksCheckTests(CheckTestCase):

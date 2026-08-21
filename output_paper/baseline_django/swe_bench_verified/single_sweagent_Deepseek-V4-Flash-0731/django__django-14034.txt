@@ -1,0 +1,82 @@
+diff --git a/django/forms/boundfield.py b/django/forms/boundfield.py
+index a061f15f87..1cf8503d6c 100644
+--- a/django/forms/boundfield.py
++++ b/django/forms/boundfield.py
+@@ -232,8 +232,12 @@ class BoundField:
+     def build_widget_attrs(self, attrs, widget=None):
+         widget = widget or self.field.widget
+         attrs = dict(attrs)  # Copy attrs to avoid modifying the argument.
+-        if widget.use_required_attribute(self.initial) and self.field.required and self.form.use_required_attribute:
+-            attrs['required'] = True
++        if (widget.use_required_attribute(self.initial) and
++                self.field.required and self.form.use_required_attribute):
++            if hasattr(self.field, 'require_all_fields') and not self.field.require_all_fields:
++                attrs['required'] = False
++            else:
++                attrs['required'] = True
+         if self.field.disabled:
+             attrs['disabled'] = True
+         return attrs
+diff --git a/django/forms/widgets.py b/django/forms/widgets.py
+index 00c19e2c55..0e03844d99 100644
+--- a/django/forms/widgets.py
++++ b/django/forms/widgets.py
+@@ -843,7 +843,11 @@ class MultiWidget(Widget):
+                 widget_attrs = final_attrs.copy()
+                 widget_attrs['id'] = '%s_%s' % (id_, i)
+             else:
+-                widget_attrs = final_attrs
++                widget_attrs = final_attrs.copy()
++            if 'required' in widget_attrs and not widget_attrs['required']:
++                # The parent MultiValueField is required, but requires only one
++                # field. Use each subwidget's required attribute instead.
++                widget_attrs['required'] = widget.is_required
+             subwidgets.append(widget.get_context(widget_name, widget_value, widget_attrs)['widget'])
+         context['widget']['subwidgets'] = subwidgets
+         return context
+diff --git a/tests/forms_tests/field_tests/test_multivaluefield.py b/tests/forms_tests/field_tests/test_multivaluefield.py
+index 29287d0b01..dd7f56897b 100644
+--- a/tests/forms_tests/field_tests/test_multivaluefield.py
++++ b/tests/forms_tests/field_tests/test_multivaluefield.py
+@@ -172,3 +172,41 @@ class MultiValueFieldTest(SimpleTestCase):
+         })
+         form.is_valid()
+         self.assertEqual(form.cleaned_data['field1'], 'some text,JP,2007-04-25 06:24:00')
++
++    def test_required_attribute_for_subwidgets(self):
++        class MyMultiWidget(MultiWidget):
++            def decompress(self, value):
++                return []
++
++        class MyMultiValueField(MultiValueField):
++            widget = MyMultiWidget
++
++            def __init__(self, **kwargs):
++                fields = (
++                    CharField(required=False),
++                    CharField(),
++                )
++                super().__init__(
++                    fields,
++                    widget=self.widget(widgets=[f.widget for f in fields]),
++                    require_all_fields=False,
++                    **kwargs,
++                )
++
++            def compress(self, data_list):
++                return data_list
++
++        class TestForm(Form):
++            field = MyMultiValueField()
++            optional = MyMultiValueField(required=False)
++
++        form = TestForm()
++        self.assertHTMLEqual(
++            form.as_p(),
++            '<p><label for="id_field_0">Field:</label>'
++            '<input type="text" name="field_0" id="id_field_0">'
++            '<input type="text" name="field_1" required id="id_field_1"></p>'
++            '<p><label for="id_optional_0">Optional:</label>'
++            '<input type="text" name="optional_0" id="id_optional_0">'
++            '<input type="text" name="optional_1" id="id_optional_1"></p>',
++        )

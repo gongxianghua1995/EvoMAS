@@ -1,0 +1,57 @@
+diff --git a/django/core/files/locks.py b/django/core/files/locks.py
+index c46b00b905..4938347ea7 100644
+--- a/django/core/files/locks.py
++++ b/django/core/files/locks.py
+@@ -107,9 +107,15 @@ else:
+             return True
+     else:
+         def lock(f, flags):
+-            ret = fcntl.flock(_fd(f), flags)
+-            return ret == 0
++            try:
++                fcntl.flock(_fd(f), flags)
++                return True
++            except OSError:
++                return False
+ 
+         def unlock(f):
+-            ret = fcntl.flock(_fd(f), fcntl.LOCK_UN)
+-            return ret == 0
++            try:
++                fcntl.flock(_fd(f), fcntl.LOCK_UN)
++                return True
++            except OSError:
++                return False
+diff --git a/tests/files/tests.py b/tests/files/tests.py
+index 047c8935b8..0ea5ef3f25 100644
+--- a/tests/files/tests.py
++++ b/tests/files/tests.py
+@@ -8,7 +8,7 @@ from io import BytesIO, StringIO, TextIOWrapper
+ from pathlib import Path
+ from unittest import mock
+ 
+-from django.core.files import File
++from django.core.files import File, locks
+ from django.core.files.base import ContentFile
+ from django.core.files.move import file_move_safe
+ from django.core.files.temp import NamedTemporaryFile
+@@ -411,3 +411,19 @@ class SpooledTempTests(unittest.TestCase):
+             temp.write(b"foo bar baz quux\n")
+             django_file = File(temp, name="something.txt")
+             self.assertEqual(django_file.size, 17)
++
++
++class LockTests(unittest.TestCase):
++    def test_lock_returns_true_when_successful(self):
++        with tempfile.NamedTemporaryFile() as file:
++            self.assertTrue(locks.lock(file, locks.LOCK_EX | locks.LOCK_NB))
++            self.assertTrue(locks.unlock(file))
++
++    def test_lock_returns_false_when_locked(self):
++        with tempfile.NamedTemporaryFile() as file1:
++            self.assertTrue(locks.lock(file1, locks.LOCK_EX | locks.LOCK_NB))
++            with open(file1.name) as file2:
++                # Trying to lock the same file through a different handle with
++                # LOCK_NB should fail immediately and return False.
++                self.assertFalse(locks.lock(file2, locks.LOCK_EX | locks.LOCK_NB))
++            self.assertTrue(locks.unlock(file1))

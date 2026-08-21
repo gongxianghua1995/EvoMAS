@@ -1,0 +1,40 @@
+diff --git a/django/forms/widgets.py b/django/forms/widgets.py
+index 6fe220bea7..f7110b9f1e 100644
+--- a/django/forms/widgets.py
++++ b/django/forms/widgets.py
+@@ -521,11 +521,10 @@ class CheckboxInput(Input):
+         return str(value)
+ 
+     def get_context(self, name, value, attrs):
++        context = super().get_context(name, value, attrs)
+         if self.check_test(value):
+-            if attrs is None:
+-                attrs = {}
+-            attrs['checked'] = True
+-        return super().get_context(name, value, attrs)
++            context['widget']['attrs']['checked'] = True
++        return context
+ 
+     def value_from_datadict(self, data, files, name):
+         if name not in data:
+diff --git a/tests/forms_tests/widget_tests/test_checkboxinput.py b/tests/forms_tests/widget_tests/test_checkboxinput.py
+index 6483b7f211..e7b55d0b64 100644
+--- a/tests/forms_tests/widget_tests/test_checkboxinput.py
++++ b/tests/forms_tests/widget_tests/test_checkboxinput.py
+@@ -74,6 +74,16 @@ class CheckboxInputTest(WidgetTest):
+         with self.assertRaises(AttributeError):
+             widget.render('greeting', True)
+ 
++    def test_render_does_not_mutate_attrs(self):
++        # SplitArrayWidget reuses the same attrs dict across subwidgets so a
++        # checked CheckboxInput must not mutate the shared attrs dict (#30192).
++        widget = CheckboxInput()
++        attrs = widget.attrs
++        widget.get_context('is_cool', True, attrs)
++        context = widget.get_context('is_cool', False, attrs)
++        self.assertNotIn('checked', context['widget']['attrs'])
++        self.assertNotIn('checked', attrs)
++
+     def test_value_from_datadict(self):
+         """
+         The CheckboxInput widget will return False if the key is not found in

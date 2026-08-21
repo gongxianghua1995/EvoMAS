@@ -483,12 +483,14 @@ class OpenAIModel:
         max_tokens: int = 4096,
         temperature: float = 0.7,
         top_p: float = 1.0,
+        disable_reasoning: bool = False,
         **kwargs
     ):
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.top_p = top_p
+        self.disable_reasoning = disable_reasoning
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
 
         # Token usage tracking (cumulative across all calls)
@@ -575,13 +577,21 @@ class OpenAIModel:
     def _call_openai_api(self, messages: List[Dict[str, str]]) -> str:
         """Call the OpenAI API"""
         try:
-            response = self.client.chat.completions.create(
+            create_kwargs = dict(
                 model=self.model,
                 messages=messages,
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
-                top_p=self.top_p
+                top_p=self.top_p,
             )
+            # Disable reasoning for hybrid models (Deepseek-V4-Flash, GLM-5.x,
+            # Qwen3) hosted on vLLM-style gateways. Without this, reasoning
+            # burns the entire max_tokens budget and content comes back empty.
+            if self.disable_reasoning:
+                create_kwargs["extra_body"] = {
+                    "chat_template_kwargs": {"enable_thinking": False}
+                }
+            response = self.client.chat.completions.create(**create_kwargs)
 
             # Store token usage for this call
             self._last_input_tokens = response.usage.prompt_tokens

@@ -1,0 +1,94 @@
+diff --git a/django/core/serializers/python.py b/django/core/serializers/python.py
+index 36048601af..5c6e1c2689 100644
+--- a/django/core/serializers/python.py
++++ b/django/core/serializers/python.py
+@@ -79,7 +79,7 @@ class Serializer(base.Serializer):
+                     return self._value_from_field(value, value._meta.pk)
+ 
+                 def queryset_iterator(obj, field):
+-                    return getattr(obj, field.name).only("pk").iterator()
++                    return getattr(obj, field.name).select_related().only("pk").iterator()
+ 
+             m2m_iter = getattr(obj, "_prefetched_objects_cache", {}).get(
+                 field.name,
+diff --git a/django/core/serializers/xml_serializer.py b/django/core/serializers/xml_serializer.py
+index 1d3269c41a..71e977debb 100644
+--- a/django/core/serializers/xml_serializer.py
++++ b/django/core/serializers/xml_serializer.py
+@@ -155,7 +155,7 @@ class Serializer(base.Serializer):
+                     self.xml.addQuickElement("object", attrs={"pk": str(value.pk)})
+ 
+                 def queryset_iterator(obj, field):
+-                    return getattr(obj, field.name).only("pk").iterator()
++                    return getattr(obj, field.name).select_related().only("pk").iterator()
+ 
+             m2m_iter = getattr(obj, "_prefetched_objects_cache", {}).get(
+                 field.name,
+diff --git a/tests/serializers/models/base.py b/tests/serializers/models/base.py
+index af9ca2b20a..7434e74bd3 100644
+--- a/tests/serializers/models/base.py
++++ b/tests/serializers/models/base.py
+@@ -163,3 +163,26 @@ class ComplexModel(models.Model):
+     field1 = models.CharField(max_length=10)
+     field2 = models.CharField(max_length=10)
+     field3 = models.CharField(max_length=10)
++
++
++class CategoryWithSelectRelatedManager(models.Manager):
++    def get_queryset(self):
++        return super().get_queryset().select_related("meta_data")
++
++
++class CategoryWithSelectRelated(models.Model):
++    name = models.CharField(max_length=20)
++    meta_data = models.ForeignKey(
++        CategoryMetaData, models.SET_NULL, null=True, default=None
++    )
++    objects = CategoryWithSelectRelatedManager()
++
++    class Meta:
++        ordering = ("name",)
++
++    def __str__(self):
++        return self.name
++
++
++class ArticleWithSelectRelatedM2M(models.Model):
++    categories = models.ManyToManyField(CategoryWithSelectRelated, blank=True)
+diff --git a/tests/serializers/tests.py b/tests/serializers/tests.py
+index 67ae8f43de..e510a532b3 100644
+--- a/tests/serializers/tests.py
++++ b/tests/serializers/tests.py
+@@ -14,10 +14,13 @@ from django.test.utils import Approximate
+ from .models import (
+     Actor,
+     Article,
++    ArticleWithSelectRelatedM2M,
+     Author,
+     AuthorProfile,
+     BaseModel,
+     Category,
++    CategoryMetaData,
++    CategoryWithSelectRelated,
+     Child,
+     ComplexModel,
+     Movie,
+@@ -435,6 +438,18 @@ class SerializersTestBase:
+         meta_data_sql = ctx[2]["sql"]
+         self.assertIn(connection.ops.quote_name("kind"), meta_data_sql)
+ 
++    def test_serialize_m2m_with_custom_manager_select_related(self):
++        category = CategoryWithSelectRelated.objects.create(
++            name="test",
++            meta_data=CategoryMetaData.objects.create(
++                kind="kind", name="name", value="value"
++            ),
++        )
++        article = ArticleWithSelectRelatedM2M.objects.create()
++        article.categories.add(category)
++        output = serializers.serialize(self.serializer_name, [article])
++        self.assertIn(str(category.pk), output)
++
+ 
+ class SerializerAPITests(SimpleTestCase):
+     def test_stream_class(self):

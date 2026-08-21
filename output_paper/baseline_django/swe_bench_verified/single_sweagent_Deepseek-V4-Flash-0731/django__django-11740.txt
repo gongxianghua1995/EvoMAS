@@ -1,0 +1,87 @@
+diff --git a/django/db/migrations/autodetector.py b/django/db/migrations/autodetector.py
+index 0dc1c77c53..aafc5228df 100644
+--- a/django/db/migrations/autodetector.py
++++ b/django/db/migrations/autodetector.py
+@@ -963,6 +963,9 @@ class MigrationAutodetector:
+                             preserve_default = False
+                     else:
+                         field = new_field
++                    dependencies = []
++                    if new_field.is_relation and not old_field.is_relation:
++                        dependencies.extend(self._get_dependencies_for_foreign_key(new_field))
+                     self.add_operation(
+                         app_label,
+                         operations.AlterField(
+@@ -970,7 +973,8 @@ class MigrationAutodetector:
+                             name=field_name,
+                             field=field,
+                             preserve_default=preserve_default,
+-                        )
++                        ),
++                        dependencies=dependencies,
+                     )
+                 else:
+                     # We cannot alter between m2m and concrete fields
+diff --git a/tests/migrations/test_autodetector.py b/tests/migrations/test_autodetector.py
+index e9926ba3bf..34972846c3 100644
+--- a/tests/migrations/test_autodetector.py
++++ b/tests/migrations/test_autodetector.py
+@@ -1729,6 +1729,58 @@ class AutodetectorTests(TestCase):
+         )
+         self.assertEqual(to_model, 'thirdapp.CustomUser')
+ 
++    def test_alter_field_to_fk_with_dependency(self):
++        """
++        #29903 - Changing a non-relation field to a ForeignKey should create
++        a dependency on the referenced app.
++        """
++        before = [
++            ModelState("testapp", "Author", [
++                ("id", models.AutoField(primary_key=True)),
++                ("name", models.CharField(max_length=200)),
++                ("book", models.CharField(max_length=100)),
++            ]),
++            ModelState("otherapp", "Book", [
++                ("id", models.AutoField(primary_key=True)),
++                ("title", models.CharField(max_length=200)),
++            ]),
++        ]
++        after = [
++            ModelState("testapp", "Author", [
++                ("id", models.AutoField(primary_key=True)),
++                ("name", models.CharField(max_length=200)),
++                ("book", models.ForeignKey("otherapp.Book", models.CASCADE)),
++            ]),
++            ModelState("otherapp", "Book", [
++                ("id", models.AutoField(primary_key=True)),
++                ("title", models.CharField(max_length=200)),
++            ]),
++        ]
++        changes = self.get_changes(before, after)
++        self.assertNumberMigrations(changes, 'testapp', 1)
++        self.assertOperationTypes(changes, 'testapp', 0, ['AlterField'])
++        self.assertMigrationDependencies(changes, 'testapp', 0, [('otherapp', '__first__')])
++
++    def test_alter_field_to_fk_preserves_swappable_dependency(self):
++        """
++        #29903 - A relation to a swappable model should preserve the
++        swappable dependency when altering a non-relation field to a FK.
++        """
++        author_without_user = ModelState("testapp", "Author", [
++            ("id", models.AutoField(primary_key=True)),
++            ("name", models.CharField(max_length=200)),
++            ("user", models.CharField(max_length=100)),
++        ])
++        with isolate_lru_cache(apps.get_swappable_settings_name):
++            before = self.make_project_state([author_without_user])
++            with override_settings(AUTH_USER_MODEL='thirdapp.CustomUser'):
++                after = self.make_project_state([self.custom_user, self.author_with_custom_user])
++            autodetector = MigrationAutodetector(before, after)
++            changes = autodetector._detect_changes()
++        self.assertNumberMigrations(changes, 'testapp', 1)
++        self.assertOperationTypes(changes, 'testapp', 0, ['AlterField'])
++        self.assertMigrationDependencies(changes, 'testapp', 0, [('__setting__', 'AUTH_USER_MODEL')])
++
+     def test_add_field_with_default(self):
+         """#22030 - Adding a field with a default should work."""
+         changes = self.get_changes([self.author_empty], [self.author_name_default])

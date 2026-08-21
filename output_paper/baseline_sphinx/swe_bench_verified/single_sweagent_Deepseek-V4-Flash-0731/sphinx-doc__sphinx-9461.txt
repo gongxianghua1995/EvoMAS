@@ -1,0 +1,40 @@
+diff --git a/tests/roots/test-ext-autodoc/target/classprop.py b/tests/roots/test-ext-autodoc/target/classprop.py
+new file mode 100644
+index 000000000..daeccd71b
+--- /dev/null
++++ b/tests/roots/test-ext-autodoc/target/classprop.py
+@@ -0,0 +1,34 @@
++"""Module for classmethod+property test."""
++
++
++class BaseClass:
++    @classmethod
++    @property
++    def baseclass_class_property(cls):
++        """Base class class property."""
++        return "base"
++
++    @classmethod
++    @property
++    def baseclass_abstract_class_property(cls):
++        """Base class abstract class property."""
++        return "base abstract"
++
++    @property
++    def baseclass_property(cls):
++        """Base class regular property."""
++        return "base prop"
++
++
++class SubClass(BaseClass):
++    @classmethod
++    @property
++    def subclass_class_property(cls):
++        """Sub class class property."""
++        return "sub"
++
++    @classmethod
++    @property
++    def subclass_abstract_class_property(cls):
++        """Sub class abstract class property."""
++        return "sub abstract"

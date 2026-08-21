@@ -1,0 +1,451 @@
+commit 95dcced71560b7dc6a1d6c10c1833ee2b2175733
+Author: gxh_1995 <aldPqlD8pFlEMl6X.gxh_1995@noreply.gitcode.com>
+Date:   Wed Aug 12 15:45:14 2026 +0800
+
+    Add mini-swe-agent runner: dead-loop guard, step logger, repo detection
+    
+    Switch pool configs to minisweagent backend + Qwen3.7-Plus so they run
+    against the OpenAI-compatible endpoint. Add a wrapper around model.query
+    that logs each IN/OUT step and force-submits when the framework nudges
+    for a tool call or a post-PASSED grace expires — this stops the "task is
+    done but framework keeps asking for tool calls" spiral we hit on
+    astropy__astropy-12907.
+    
+    Also drop empty tool_calls before appending to history (DashScope rejects
+    them), and fall back to instance_id for repo path detection when the task
+    query lacks a Repository: line.
+    
+    Meta-model + judge get the same step-logging wrapper so SELECT / GENERATE
+    / MUTATE / CROSSOVER / judge calls show up in run.log with IN/OUT bodies.
+    
+    READING_GUIDE.md documents the pipeline (7 STEPs, main data structures,
+    call graph) so new readers can navigate.
+    
+    run_swe_bench_sympy.sh is a batch runner for sympy subset.
+
+diff --git a/src/agents/runners/minisweagent.py b/src/agents/runners/minisweagent.py
+index 521e6df..dcf4697 100644
+--- a/src/agents/runners/minisweagent.py
++++ b/src/agents/runners/minisweagent.py
+@@ -57,6 +57,169 @@ except ImportError:
+     LocalEnvironment = None
+ 
+ 
++def _wrap_query_with_step_logger(model: Any, agent_id: str, work_dir: Optional[Path] = None) -> None:
++    """Wrap model.query to log each step's IN/OUT to the standard logger.
++
++    Also detects the "task is done but framework keeps demanding tool calls"
++    death spiral (see FRAMEWORK_NUDGE below) and forcibly injects mini-swe-agent's
++    submit command so the agent exits cleanly instead of burning `step_limit`
++    LLM calls on echo/sed no-ops.
++
++    `work_dir` is used to anchor the submit command with an absolute `cd` so
++    that `git diff` runs inside the repo even if the agent has cd'd elsewhere.
++    """
++    import re
++    import time as _time
++
++    original_query = model.query
++    step_counter = [0]
++    FRAMEWORK_NUDGE = "No tool calls found in the response. Every response MUST include at least one tool call."
++    # Anchor to work_dir so `git diff` finds .git; `; true` ensures returncode=0
++    # (mini-swe-agent's submit trigger requires the whole command to exit 0).
++    cd_prefix = f"cd {work_dir} && " if work_dir else ""
++    SUBMIT_CMD = f"{cd_prefix}echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT ; git add -A 2>/dev/null ; git diff --cached 2>/dev/null ; true"
++    # Post-PASSED grace window: once pytest returns green, give the model this
++    # many more steps to voluntarily submit. If it keeps spinning (over-thinking
++    # / hunting for a different bug), force submit. Guards against the case
++    # where the model keeps producing tool calls (so the framework never nudges)
++    # but is not making meaningful progress.
++    POST_PASSED_GRACE = 15
++    PASSED_MARKER_RE = re.compile(r"(\d+ passed|all tests? passed|PASSED)", re.IGNORECASE)
++
++    submit_forced = [False]
++    passed_at_step = [None]  # first step where tool observation showed pytest green
++
++    def _fmt_response(response) -> str:
++        if not isinstance(response, dict):
++            return str(response)
++        parts = []
++        content = str(response.get("content") or "").strip()
++        if content:
++            parts.append(f"[content]\n{content}")
++        reasoning = str(response.get("reasoning_content") or "").strip()
++        if reasoning:
++            parts.append(f"[reasoning]\n{reasoning}")
++        actions = (response.get("extra") or {}).get("actions") or []
++        for i, a in enumerate(actions):
++            cmd = a.get("command") if isinstance(a, dict) else a
++            parts.append(f"[action {i}]\n{cmd}")
++        if not actions:
++            for i, tc in enumerate(response.get("tool_calls") or []):
++                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
++                parts.append(f"[tool_call {i}] {fn.get('name', '?')}({fn.get('arguments', '')})")
++        return "\n\n".join(parts) if parts else "<empty>"
++
++    def _force_submit(response: dict) -> dict:
++        """Rewrite response so the next env step executes the submit command."""
++        # Overwrite the action list — mini-swe-agent's execution loop reads
++        # response["extra"]["actions"][*]["command"].
++        extra = response.setdefault("extra", {})
++        actions = extra.get("actions") or []
++        forced_action = {"command": SUBMIT_CMD}
++        # Keep the original tool_call_id if present so tool-call bookkeeping stays valid.
++        if actions and isinstance(actions[0], dict) and "tool_call_id" in actions[0]:
++            forced_action["tool_call_id"] = actions[0]["tool_call_id"]
++        extra["actions"] = [forced_action]
++        # Also patch tool_calls at the OpenAI-format level for models that go
++        # through the tool_calls path instead of the parsed actions path.
++        tcs = response.get("tool_calls") or []
++        if tcs and isinstance(tcs[0], dict):
++            import json as _json
++            tcs[0].setdefault("function", {})["arguments"] = _json.dumps({"command": SUBMIT_CMD})
++            tcs[0]["function"]["name"] = "bash"
++            response["tool_calls"] = [tcs[0]]
++        return response
++
++    def logged_query(messages, **kwargs):
++        step_counter[0] += 1
++        step = step_counter[0]
++        started = _time.time()
++
++        # Detect the "done but stuck" spiral BEFORE calling the LLM. Two triggers:
++        # (A) Framework has already nudged for a tool call — the model returned
++        #     nothing meaningful last step, task is likely done. Skip the LLM.
++        # (B) Post-PASSED grace expired — the model saw pytest go green N steps
++        #     ago but keeps spinning (over-thinking, hunting for a different bug).
++        #     Skip the LLM and submit whatever's on disk.
++        forced_here = False
++        reason = None
++
++        # Update PASSED tracker from the newest tool observation
++        if passed_at_step[0] is None and messages:
++            last = messages[-1]
++            if last.get("role") in ("tool", "observation"):
++                last_content = str(last.get("content") or "")
++                if PASSED_MARKER_RE.search(last_content):
++                    passed_at_step[0] = step - 1  # PASSED came from prev step's cmd
++                    logger.info(
++                        f"[LLM {agent_id} step {step}] Pytest PASSED detected in "
++                        f"observation (grace window: {POST_PASSED_GRACE} more steps)."
++                    )
++
++        if not submit_forced[0] and step >= 3 and messages:
++            last = messages[-1]
++            last_role = last.get("role")
++            last_content = str(last.get("content") or "") if last_role else ""
++
++            if last_role in ("user", "tool", "observation") and FRAMEWORK_NUDGE in last_content:
++                reason = "framework nudged for a tool call"
++            elif (
++                passed_at_step[0] is not None
++                and step - passed_at_step[0] >= POST_PASSED_GRACE
++            ):
++                reason = (
++                    f"post-PASSED grace of {POST_PASSED_GRACE} steps expired "
++                    f"(passed at step {passed_at_step[0]})"
++                )
++
++            if reason:
++                logger.warning(
++                    f"[LLM {agent_id} step {step}] Forcing submit ({reason})."
++                )
++                response = {
++                    "content": "",
++                    "role": "assistant",
++                    "extra": {"actions": [{"command": SUBMIT_CMD}]},
++                }
++                submit_forced[0] = True
++                forced_here = True
++
++        if not forced_here:
++            response = original_query(messages, **kwargs)
++        duration = _time.time() - started
++
++        # DashScope (Qwen) rejects assistant messages with `tool_calls: []` in
++        # history: "Empty tool_calls is not supported in message". Strip empty
++        # or falsy tool_calls before the framework appends this response into
++        # self.messages, so subsequent queries don't blow up.
++        if isinstance(response, dict) and not response.get("tool_calls"):
++            response.pop("tool_calls", None)
++
++        out_text = _fmt_response(response)
++        if len(out_text) > 2000:
++            out_text = out_text[:2000] + f"\n... [truncated, total {len(out_text)} chars]"
++
++        last_in = ""
++        for m in reversed(messages or []):
++            role = m.get("role")
++            if role in ("tool", "observation", "user", "system"):
++                raw = str(m.get("content", ""))
++                if len(raw) > 1000:
++                    raw = raw[:1000] + f"\n... [truncated, total {len(raw)} chars]"
++                last_in = f"[{role}]\n{raw}"
++                break
++
++        logger.info(
++            f"\n{'='*20} [LLM {agent_id} step {step}] ({duration:.1f}s) {'='*20}\n"
++            f"--- IN ---\n{last_in}\n"
++            f"--- OUT ---\n{out_text}\n"
++            f"{'='*60}"
++        )
++        return response
++
++    model.query = logged_query
++
++
+ def get_config_path(config_spec: str) -> Path:
+     """
+     Resolve configuration specification to actual path.
+@@ -217,6 +380,14 @@ class MinisweagentRunner(BaseAgentRunner):
+             self.agent_config = {}
+             self.env_config = {}
+ 
++        # Default step_limit for SWE-bench tasks (prevents infinite loops).
++        # Kept low because our post-PASSED grace + framework-nudge safety net
++        # should submit within ~step_at_passed + 15; anything past that is spin.
++        if 'step_limit' not in self.agent_config:
++            self.agent_config['step_limit'] = 50
++        if 'cost_limit' not in self.agent_config:
++            self.agent_config['cost_limit'] = 10.0  # Default $10 budget
++
+         logger.info(f"MinisweagentRunner initialized with config: {config}")
+         logger.info(f"  step_limit: {self.agent_config.get('step_limit', 'default')}")
+         logger.info(f"  cost_limit: {self.agent_config.get('cost_limit', 'default')}")
+@@ -238,6 +409,31 @@ class MinisweagentRunner(BaseAgentRunner):
+         except ImportError:
+             logger.warning("dotenv not available, relying on existing environment")
+ 
++        # Route "openai:*" model IDs to the configured OpenAI-compatible endpoint.
++        # Keys/base URLs must come from env or .env — no in-source fallback.
++        import os
++        if "openai:" in spec.model_id:
++            api_base = (
++                os.environ.get("OPENAI_BASE_URL")
++                or os.environ.get("API_BASE")
++            )
++            api_key = (
++                os.environ.get("OPENAI_API_KEY")
++                or os.environ.get("API_KEY")
++            )
++            if not api_base or not api_key:
++                raise RuntimeError(
++                    "openai:* model requires OPENAI_BASE_URL/OPENAI_API_KEY "
++                    "(or API_BASE/API_KEY) to be set in the environment or .env"
++                )
++            os.environ["LITELLM_BASE_URL"] = api_base
++            os.environ["LITELLM_API_KEY"] = api_key
++            os.environ["OPENAI_API_KEY"] = api_key
++            import litellm
++            litellm.api_base = api_base
++            # Cost tracking fails for models not in litellm's price table
++            os.environ.setdefault("MSWEA_COST_TRACKING", "ignore_errors")
++
+         # Use mini-swe-agent's native model loading (uses litellm directly)
+         # This ensures we use the exact same model interface as the original
+         from minisweagent.models import get_model as miniswe_get_model
+@@ -249,8 +445,9 @@ class MinisweagentRunner(BaseAgentRunner):
+         if ':' in model_id:
+             provider, model_name = model_id.split(':', 1)
+             if provider.lower() == 'openai':
+-                # litellm auto-detects OpenAI models
+-                model_id = model_name
++                # For OpenAI-compatible endpoints (GLM, etc.), use "provider/model" format
++                # so litellm knows which provider to use
++                model_id = f"openai/{model_name}"
+             else:
+                 # Other providers use "provider/model" format
+                 model_id = f"{provider}/{model_name}"
+@@ -258,6 +455,9 @@ class MinisweagentRunner(BaseAgentRunner):
+         logger.info(f"Loading model with litellm: {model_id}")
+         model = miniswe_get_model(model_id)
+ 
++        # Log every step's IN/OUT to run.log (no separate archive file).
++        _wrap_query_with_step_logger(model, spec.id, work_dir=working_dir)
++
+         # Create local environment
+         local_env_config = {
+             'cwd': str(working_dir),
+@@ -273,6 +473,12 @@ class MinisweagentRunner(BaseAgentRunner):
+             if key in agent_config and agent_config[key]:
+                 agent_config[key] = agent_config[key].replace('/testbed', str(working_dir))
+ 
++        # Provide defaults for required fields if missing
++        if 'system_template' not in agent_config:
++            agent_config['system_template'] = "You are a helpful assistant that can interact with a computer."
++        if 'instance_template' not in agent_config:
++            agent_config['instance_template'] = "Please solve this issue: {{task}}"
++
+         # Create agent
+         agent = DefaultAgent(
+             model=model,
+@@ -284,12 +490,25 @@ class MinisweagentRunner(BaseAgentRunner):
+         logger.info(f"  Config: {self.config_name}, step_limit={agent_config.get('step_limit')}")
+         return agent
+ 
+-    def _extract_repo_path(self, task: str) -> Optional[Path]:
+-        """Extract repository path from SWE-bench task query."""
++    def _extract_repo_path(self, task: str, instance_id: str = None) -> Optional[Path]:
++        """Extract repository path from SWE-bench task query or instance_id."""
+         import re
++
++        # Try to extract from task query first
+         match = re.search(r'Repository:\s*(/[^\s\n]+)', task)
+         if match:
+             return Path(match.group(1))
++
++        # Try to extract from instance_id (e.g., "sympy__sympy-11400" -> "sympy")
++        if instance_id:
++            repo_match = re.match(r'(\w+)__', instance_id)
++            if repo_match:
++                repo_name = repo_match.group(1)
++                # Check local repos directory
++                local_repo = Path("dataset/repos") / repo_name
++                if local_repo.exists():
++                    return local_repo
++
+         return None
+ 
+     def _reset_repo(self, repo_path: Path):
+@@ -345,8 +564,12 @@ class MinisweagentRunner(BaseAgentRunner):
+ 
+     def run(self, spec: AgentSpec, task: str, context: Optional[Dict[str, Any]] = None) -> AgentResult:
+         """Run mini-swe-agent with configured settings."""
+-        repo_path = self._extract_repo_path(task)
++        instance_id = context.get('instance_id') if context else None
++
++        # Extract repo path BEFORE extracting problem statement (which strips Repository: line)
++        repo_path = self._extract_repo_path(task, instance_id)
+         use_repo_dir = repo_path is not None and repo_path.exists()
++        logger.debug(f"Repo detection: repo_path={repo_path}, use_repo_dir={use_repo_dir}, instance_id={instance_id}")
+ 
+         if use_repo_dir:
+             logger.info(f"Running mini-swe-agent in repository: {repo_path}")
+@@ -367,15 +590,25 @@ class MinisweagentRunner(BaseAgentRunner):
+                     context_str += f"- {key}: {value}\n"
+                 enhanced_task = task + context_str
+ 
++            # Extract problem statement (this removes Repository:/Instance ID: lines)
+             problem_statement = self._extract_problem_statement(enhanced_task)
+ 
++            # For minisweagent: prepend repo path so agent knows where to work
++            if use_repo_dir:
++                problem_statement = f"Repository: {repo_path}\nInstance ID: {instance_id or spec.id}\n\n{problem_statement}"
++
++            logger.debug(f"Problem statement preview: {problem_statement[:200]}...")
+             logger.info(f"Running agent with step_limit={self.agent_config.get('step_limit')}")
+-            exit_status, exit_message = agent.run(problem_statement)
++
++            run_result = agent.run(problem_statement)
++            exit_status = run_result.get('exit_status', 'unknown')
++            exit_message = run_result.get('submission', '')
+ 
+             # The exit_message from Submitted exception contains the git diff
+             # (from: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && git add -A && git diff --cached)
+             # This is the primary output for SWE-bench patches
+             output = exit_message
++            logger.info(f"Agent finished: {exit_status} (messages={len(agent.messages)})")
+ 
+             # For local execution (non-Docker), also capture git diff as fallback
+             # In case the agent didn't use the submission command properly
+@@ -419,8 +652,8 @@ class MinisweagentRunner(BaseAgentRunner):
+                 metadata={
+                     'exit_status': exit_status,
+                     'exit_message': exit_message,
+-                    'model_cost': agent.model.cost,
+-                    'model_calls': agent.model.n_calls,
++                    'model_cost': agent.cost,
++                    'model_calls': agent.n_calls,
+                     'total_messages': len(agent.messages),
+                     'had_patch_file': bool(patch_content),
+                     'used_repo_dir': use_repo_dir,
+@@ -431,7 +664,7 @@ class MinisweagentRunner(BaseAgentRunner):
+             )
+ 
+             logger.info(f"Agent {spec.id} completed: {exit_status}")
+-            logger.info(f"  Model calls: {agent.model.n_calls}, Cost: ${agent.model.cost:.4f}")
++            logger.info(f"  Model calls: {agent.n_calls}, Cost: ${agent.cost:.4f}")
+             return result
+ 
+         except Exception as e:
+diff --git a/src/dataset/llm_as_judge.py b/src/dataset/llm_as_judge.py
+index 24972b7..4c2201c 100644
+--- a/src/dataset/llm_as_judge.py
++++ b/src/dataset/llm_as_judge.py
+@@ -272,6 +272,8 @@ class LLMAsJudgeEvaluator:
+                 temperature=temperature,
+                 max_tokens=max_tokens
+             )
++            from src.meta_model.metamodel import _wrap_meta_model_with_step_logger
++            self.model = _wrap_meta_model_with_step_logger(self.model, "judge")
+             logger.info(f"Initialized LLM-as-Judge with {model_id} (dataset: {dataset_name or 'generic'})")
+         except Exception as e:
+             logger.error(f"Failed to initialize LLM-as-Judge: {e}")
+diff --git a/src/meta_model/metamodel.py b/src/meta_model/metamodel.py
+index 3fefbed..9e1f3c9 100644
+--- a/src/meta_model/metamodel.py
++++ b/src/meta_model/metamodel.py
+@@ -18,6 +18,53 @@ from src.models.model import get_model
+ from src.prompts.registry import PromptRegistry
+ from src.prompts.render import render_prompt
+ from src.mas.interpreter import interpret_mas
++
++
++def _wrap_meta_model_with_step_logger(model: Any, agent_id: str):
++    """Return a callable wrapper that logs each (prompt, response) call to run.log."""
++    import time as _time
++    import asyncio
++
++    is_coro = asyncio.iscoroutinefunction(model.__call__)
++    step_counter = [0]
++
++    def _log(prompt, response, duration):
++        step_counter[0] += 1
++        step = step_counter[0]
++        p_str = str(prompt)
++        r_str = str(response)
++        if len(p_str) > 800:
++            p_str = p_str[:800] + f"\n... [truncated, total {len(p_str)} chars]"
++        if len(r_str) > 2000:
++            r_str = r_str[:2000] + f"\n... [truncated, total {len(r_str)} chars]"
++        logging.getLogger(__name__).info(
++            f"\n{'='*20} [LLM {agent_id} step {step}] ({duration:.1f}s) {'='*20}\n"
++            f"--- IN ---\n{p_str}\n"
++            f"--- OUT ---\n{r_str}\n"
++            f"{'='*60}"
++        )
++
++    class _LoggedModel:
++        def __init__(self, inner):
++            self._inner = inner
++
++        def __getattr__(self, name):
++            return getattr(self._inner, name)
++
++        if is_coro:
++            async def __call__(self, prompt, *args, **kwargs):
++                start = _time.time()
++                resp = await self._inner(prompt, *args, **kwargs)
++                _log(prompt, resp, _time.time() - start)
++                return resp
++        else:
++            def __call__(self, prompt, *args, **kwargs):
++                start = _time.time()
++                resp = self._inner(prompt, *args, **kwargs)
++                _log(prompt, resp, _time.time() - start)
++                return resp
++
++    return _LoggedModel(model)
+ from src.meta_model.experience import ActionExperience, MemoryStore
+ 
+ logger = logging.getLogger(__name__)
+@@ -140,6 +187,9 @@ class MetaModel:
+             max_tokens=max_tokens
+         )
+ 
++        # Log each meta-model LLM call to run.log
++        self.model = _wrap_meta_model_with_step_logger(self.model, "meta_model")
++
+         # Load prompt templates
+         self.prompt_registry = PromptRegistry()
+ 

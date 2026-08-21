@@ -1,0 +1,91 @@
+diff --git a/django/core/servers/basehttp.py b/django/core/servers/basehttp.py
+index fef5532e58..30b6e87847 100644
+--- a/django/core/servers/basehttp.py
++++ b/django/core/servers/basehttp.py
+@@ -143,6 +143,16 @@ class ServerHandler(simple_server.ServerHandler):
+         if self.headers.get("Connection") == "close":
+             self.request_handler.close_connection = True
+ 
++    def write(self, data):
++        """Override write() to omit the response body for HEAD requests."""
++        if self.environ["REQUEST_METHOD"] == "HEAD":
++            self.bytes_sent += len(data)
++            if not self.headers_sent:
++                self.send_headers()
++                self._flush()
++            return
++        super().write(data)
++
+     def close(self):
+         self.get_stdin().read()
+         super().close()
+diff --git a/django/middleware/http.py b/django/middleware/http.py
+index 84c5466bb6..9de55b203f 100644
+--- a/django/middleware/http.py
++++ b/django/middleware/http.py
+@@ -12,8 +12,8 @@ class ConditionalGetMiddleware(MiddlewareMixin):
+ 
+     def process_response(self, request, response):
+         # It's too late to prevent an unsafe request with a 412 response, and
+-        # for a HEAD request, the response body is always empty so computing
+-        # an accurate ETag isn't possible.
++        # for a HEAD request, the response body is never computed, so setting
++        # an ETag isn't possible.
+         if request.method != "GET":
+             return response
+ 
+diff --git a/tests/servers/test_basehttp.py b/tests/servers/test_basehttp.py
+index a837505feb..182f3fa08c 100644
+--- a/tests/servers/test_basehttp.py
++++ b/tests/servers/test_basehttp.py
+@@ -106,6 +106,50 @@ class WSGIRequestHandlerTestCase(SimpleTestCase):
+ 
+         self.assertEqual(body, b"HTTP_SOME_HEADER:good")
+ 
++    def test_head_returns_no_response_body(self):
++        """HEAD requests don't return a response body (RFC 7231, 4.3.2)."""
++
++        def test_app(environ, start_response):
++            start_response("200 OK", [("Content-Type", "text/html")])
++            return [b"<!DOCTYPE html><html>Hello</html>"]
++
++        for method in ("HEAD", "GET"):
++            rfile = BytesIO()
++            rfile.write(b"%s / HTTP/1.1\r\n" % method.encode())
++            rfile.write(b"Host: testserver\r\n")
++            rfile.write(b"\r\n")
++            rfile.seek(0)
++
++            # WSGIRequestHandler closes the output file; we need to make this
++            # a no-op so we can still read its contents.
++            class UnclosableBytesIO(BytesIO):
++                def close(self):
++                    pass
++
++            wfile = UnclosableBytesIO()
++
++            def makefile(mode, *a, **kw):
++                if mode == "rb":
++                    return rfile
++                elif mode == "wb":
++                    return wfile
++
++            request = Stub(makefile=makefile)
++            server = Stub(base_environ={}, get_app=lambda: test_app)
++
++            # Prevent logging from appearing in test output.
++            with self.assertLogs("django.server", "INFO"):
++                # instantiating a handler runs the request as side effect
++                WSGIRequestHandler(request, "192.168.0.2", server)
++
++            wfile.seek(0)
++            response = wfile.read().decode()
++            if method == "HEAD":
++                self.assertTrue(response.endswith("\r\n\r\n"))
++                self.assertNotIn("<!DOCTYPE html>", response)
++            else:
++                self.assertIn("<!DOCTYPE html>", response)
++
+ 
+ class WSGIServerTestCase(SimpleTestCase):
+     request_factory = RequestFactory()

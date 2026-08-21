@@ -1,0 +1,72 @@
+diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py
+index 29e33c075f..d27869a22d 100644
+--- a/django/db/models/sql/compiler.py
++++ b/django/db/models/sql/compiler.py
+@@ -1407,7 +1407,9 @@ class SQLInsertCompiler(SQLCompiler):
+ class SQLDeleteCompiler(SQLCompiler):
+     @cached_property
+     def single_alias(self):
+-        return sum(self.query.alias_refcount[t] > 0 for t in self.query.alias_map) == 1
++        return not self.query.alias_map or sum(
++            self.query.alias_refcount[t] > 0 for t in self.query.alias_map
++        ) == 1
+ 
+     def _as_sql(self, query):
+         result = [
+@@ -1424,6 +1426,7 @@ class SQLDeleteCompiler(SQLCompiler):
+         parameters.
+         """
+         if self.single_alias:
++            self.query.get_initial_alias()
+             return self._as_sql(self.query)
+         innerq = self.query.clone()
+         innerq.__class__ = Query
+diff --git a/tests/delete/tests.py b/tests/delete/tests.py
+index c32ebba83f..3b05512c64 100644
+--- a/tests/delete/tests.py
++++ b/tests/delete/tests.py
+@@ -3,6 +3,7 @@ from math import ceil
+ from django.db import connection, models
+ from django.db.models import ProtectedError, RestrictedError
+ from django.db.models.deletion import Collector
++from django.db.models.sql import DeleteQuery
+ from django.db.models.sql.constants import GET_ITERATOR_CHUNK_SIZE
+ from django.test import TestCase, skipIfDBFeature, skipUnlessDBFeature
+ 
+@@ -703,3 +704,36 @@ class FastDeleteTests(TestCase):
+         referer = Referrer.objects.create(origin=origin, unique_field=42)
+         with self.assertNumQueries(2):
+             referer.delete()
++
++
++class DeleteQueryTests(TestCase):
++    def test_delete_all_does_not_use_subquery(self):
++        # .all().delete() must generate a plain DELETE FROM statement
++        # without a subquery (regression for #31836).
++        queryset = Avatar.objects.all()
++        query = queryset.query.clone()
++        query.__class__ = DeleteQuery
++        sql, params = query.get_compiler(connection=connection).as_sql()
++        self.assertEqual(sql, 'DELETE FROM "delete_avatar"')
++        self.assertEqual(params, ())
++
++    def test_delete_with_filter_does_not_use_subquery(self):
++        # A simple filtered delete on a single table must also avoid the
++        # subquery.
++        queryset = Avatar.objects.filter(desc='missing')
++        query = queryset.query.clone()
++        query.__class__ = DeleteQuery
++        sql, params = query.get_compiler(connection=connection).as_sql()
++        self.assertEqual(sql, 'DELETE FROM "delete_avatar" WHERE "delete_avatar"."desc" = %s')
++        self.assertEqual(params, ('missing',))
++
++    def test_delete_with_join_uses_subquery(self):
++        # Deleting rows identified through a join still requires the
++        # subquery to avoid deleting from multiple tables accidentally.
++        Avatar.objects.create(desc='a')
++        queryset = User.objects.filter(avatar__desc='a')
++        query = queryset.query.clone()
++        query.__class__ = DeleteQuery
++        sql, params = query.get_compiler(connection=connection).as_sql()
++        self.assertIn('IN (SELECT ', sql)
++        self.assertEqual(params, ('a',))

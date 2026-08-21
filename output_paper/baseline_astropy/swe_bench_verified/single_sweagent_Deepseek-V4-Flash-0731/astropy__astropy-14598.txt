@@ -1,0 +1,81 @@
+diff --git a/astropy/io/fits/card.py b/astropy/io/fits/card.py
+index 1b3285ddce..d684c61ce7 100644
+--- a/astropy/io/fits/card.py
++++ b/astropy/io/fits/card.py
+@@ -8,7 +8,7 @@ import numpy as np
+ from astropy.utils.exceptions import AstropyUserWarning
+ 
+ from . import conf
+-from .util import _is_int, _str_to_num, _words_group, translate
++from .util import _is_int, _split_escaped_value, _str_to_num, _words_group, translate
+ from .verify import VerifyError, VerifyWarning, _ErrList, _Verify
+ 
+ __all__ = ["Card", "Undefined"]
+@@ -64,7 +64,7 @@ class Card(_Verify):
+ 
+     # Used in cards using the CONTINUE convention which expect a string
+     # followed by an optional comment
+-    _strg = r"\'(?P<strg>([ -~]+?|\'\'|) *?)\'(?=$|/| )"
++    _strg = r"\'(?P<strg>(?:\'\'|[^\'])*?)\'(?=$|/| )"
+     _comm_field = r"(?P<comm_field>(?P<sepr>/ *)(?P<comm>(.|\n)*))"
+     _strg_comment_RE = re.compile(f"({_strg})? *{_comm_field}?")
+ 
+@@ -859,7 +859,7 @@ class Card(_Verify):
+                     return kw, vc
+ 
+                 value = m.group("strg") or ""
+-                value = value.rstrip().replace("''", "'")
++                value = value.rstrip()
+                 if value and value[-1] == "&":
+                     value = value[:-1]
+                 values.append(value)
+@@ -1058,7 +1058,7 @@ class Card(_Verify):
+ 
+         # do the value string
+         value = self._value.replace("'", "''")
+-        words = _words_group(value, value_length)
++        words = _split_escaped_value(value, value_length)
+         for idx, word in enumerate(words):
+             if idx == 0:
+                 headstr = "{:{len}}= ".format(self.keyword, len=KEYWORD_LENGTH)
+diff --git a/astropy/io/fits/util.py b/astropy/io/fits/util.py
+index 8561684a05..6f7facb707 100644
+--- a/astropy/io/fits/util.py
++++ b/astropy/io/fits/util.py
+@@ -930,3 +930,36 @@ def _is_dask_array(data):
+         return False
+     else:
+         return isinstance(data, Array)
++
++
++def _split_escaped_value(s, width):
++    """
++    Split a string that has been escaped for a FITS string value (i.e.
++    containing doubled single quotes) into chunks of at most ``width``
++    characters, without splitting an escaped single quote (``''``) across
++    two chunks.  A split boundary cannot occur between the two characters
++    of a ``''`` pair; this mirrors the FITS requirement that a literal
++    single quote inside a string be encoded as two consecutive single
++    quotes that must stay together.
++    """
++    words = []
++    while s:
++        if len(s) <= width:
++            words.append(s)
++            break
++        # Prefer breaking at a space, matching _words_group.
++        sp = s.rfind(" ", 0, width)
++        if sp != -1:
++            split = sp + 1
++        else:
++            split = width
++            # Do not separate the two quotes of an escaped single quote.
++            while split > 0 and s[split - 1] == "'" and s[split] == "'":
++                split -= 1
++            # If the whole chunk is made of quote pairs, we have no choice
++            # but to split anyway.
++            if split == 0:
++                split = width
++        words.append(s[:split])
++        s = s[split:]
++    return words

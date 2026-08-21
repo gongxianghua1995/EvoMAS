@@ -1,0 +1,37 @@
+diff --git a/src/_pytest/capture.py b/src/_pytest/capture.py
+index 25eab7fdf..8a0e86c70 100644
+--- a/src/_pytest/capture.py
++++ b/src/_pytest/capture.py
+@@ -447,6 +447,16 @@ class EncodedFile(object):
+         """Ensure that file.name is a string."""
+         return repr(self.buffer)
+ 
++    @property
++    def mode(self):
++        """Mode of the underlying file, but without the 'b' (binary) flag.
++
++        This is needed because text is encoded when writing, and the
++        underlying binary stream mode (like "rb+") would incorrectly
++        advertise support for binary IO.
++        """
++        return self.buffer.mode.replace("b", "")
++
+     def __getattr__(self, name):
+         return getattr(object.__getattribute__(self, "buffer"), name)
+ 
+diff --git a/testing/test_capture.py b/testing/test_capture.py
+index 5d80eb63d..72565968a 100644
+--- a/testing/test_capture.py
++++ b/testing/test_capture.py
+@@ -1212,6 +1212,11 @@ class TestStdCaptureFD(TestStdCapture):
+         """
+         )
+ 
++    def test_stdout_mode(self):
++        with self.getcapture():
++            assert "b" not in sys.stdout.mode
++            assert "b" in sys.stdout.buffer.mode
++
+     def test_intermingling(self):
+         with self.getcapture() as cap:
+             os.write(1, b"1")

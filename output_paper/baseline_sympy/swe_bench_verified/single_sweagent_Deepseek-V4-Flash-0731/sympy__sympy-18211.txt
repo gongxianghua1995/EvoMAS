@@ -1,0 +1,47 @@
+diff --git a/sympy/core/relational.py b/sympy/core/relational.py
+index f581bfa3c4..bc1cd4ae63 100644
+--- a/sympy/core/relational.py
++++ b/sympy/core/relational.py
+@@ -388,11 +388,18 @@ def __nonzero__(self):
+ 
+     def _eval_as_set(self):
+         # self is univariate and periodicity(self, x) in (0, None)
++        from sympy.sets.conditionset import ConditionSet
+         from sympy.solvers.inequalities import solve_univariate_inequality
+         syms = self.free_symbols
+         assert len(syms) == 1
+         x = syms.pop()
+-        return solve_univariate_inequality(self, x, relational=False)
++        try:
++            xset = solve_univariate_inequality(self, x, relational=False)
++        except NotImplementedError:
++            # solve_univariate_inequality raises NotImplementedError for
++            # unsolvable equations/inequalities.
++            xset = ConditionSet(x, self, S.Reals)
++        return xset
+ 
+     @property
+     def binary_symbols(self):
+diff --git a/sympy/core/tests/test_relational.py b/sympy/core/tests/test_relational.py
+index 63a8705c62..f9ee97b4b5 100644
+--- a/sympy/core/tests/test_relational.py
++++ b/sympy/core/tests/test_relational.py
+@@ -7,6 +7,7 @@
+                                    GreaterThan, LessThan, StrictGreaterThan,
+                                    StrictLessThan, Rel, Eq, Lt, Le,
+                                    Gt, Ge, Ne)
++from sympy.sets.conditionset import ConditionSet
+ from sympy.sets.sets import Interval, FiniteSet
+ 
+ from itertools import combinations
+@@ -426,6 +427,10 @@ def test_univariate_relational_as_set():
+ 
+     assert (x**2 >= 4).as_set() == Interval(-oo, -2) + Interval(2, oo)
+ 
++    n = Symbol('n')
++    assert Eq(n*cos(n) - 3*sin(n), 0).as_set() == ConditionSet(
++        n, Eq(n*cos(n) - 3*sin(n), 0), S.Reals)
++
+ 
+ @XFAIL
+ def test_multivariate_relational_as_set():

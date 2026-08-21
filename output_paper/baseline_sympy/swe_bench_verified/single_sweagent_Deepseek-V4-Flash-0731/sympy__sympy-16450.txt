@@ -1,0 +1,41 @@
+diff --git a/sympy/simplify/simplify.py b/sympy/simplify/simplify.py
+index c6b511f206..f84d5c25fc 100644
+--- a/sympy/simplify/simplify.py
++++ b/sympy/simplify/simplify.py
+@@ -251,7 +251,9 @@ def posify(eq):
+             eq[i] = e.subs(reps)
+         return f(eq), {r: s for s, r in reps.items()}
+ 
+-    reps = {s: Dummy(s.name, positive=True)
++    reps = {s: Dummy(s.name, positive=True,
++                     **{k: v for k, v in s.assumptions0.items()
++                        if k != 'positive'})
+                  for s in eq.free_symbols if s.is_positive is None}
+     eq = eq.subs(reps)
+     return eq, {r: s for s, r in reps.items()}
+diff --git a/sympy/simplify/tests/test_simplify.py b/sympy/simplify/tests/test_simplify.py
+index 5fe9352b96..866e1989c6 100644
+--- a/sympy/simplify/tests/test_simplify.py
++++ b/sympy/simplify/tests/test_simplify.py
+@@ -511,6 +511,21 @@ def test_posify():
+     assert str(Sum(posify(1/x**n)[0], (n,1,3)).expand()) == \
+         'Sum(_x**(-n), (n, 1, 3))'
+ 
++    # issue: posify should retain the assumptions of the original symbol
++    x = Symbol('x', finite=True)
++    xp, _ = posify(x)
++    assert xp.is_finite is True
++    assert xp.is_positive is True
++
++    for assum in ({'rational': True}, {'integer': True}, {'even': True},
++                  {'real': True}, {'nonnegative': True}, {'prime': True},
++                  {'odd': True}):
++        s = Symbol('y', **assum)
++        sp, _ = posify(s)
++        key = next(iter(assum))
++        assert getattr(sp, 'is_' + key) is True
++        assert sp.is_positive is True
++
+ 
+ def test_issue_4194():
+     # simplify should call cancel

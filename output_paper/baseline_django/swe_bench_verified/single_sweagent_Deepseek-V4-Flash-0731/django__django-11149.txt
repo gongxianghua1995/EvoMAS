@@ -1,0 +1,103 @@
+diff --git a/django/contrib/admin/options.py b/django/contrib/admin/options.py
+index 880a2cc17b..5e62632bf1 100644
+--- a/django/contrib/admin/options.py
++++ b/django/contrib/admin/options.py
+@@ -2111,48 +2111,58 @@ class InlineModelAdmin(BaseModelAdmin):
+             queryset = queryset.none()
+         return queryset
+ 
++    def _get_related_object_opts(self):
++        opts = self.opts
++        # The model was auto-created as intermediary for a many-to-many
++        # Many-relationship; find the target model.
++        for field in opts.fields:
++            if field.remote_field and field.remote_field.model != self.parent_model:
++                opts = field.remote_field.model._meta
++                break
++        return opts
++
+     def has_add_permission(self, request, obj):
+         if self.opts.auto_created:
+             # We're checking the rights to an auto-created intermediate model,
+             # which doesn't have its own individual permissions. The user needs
+-            # to have the view permission for the related model in order to
++            # to have the change permission for the related model in order to
+             # be able to do anything with the intermediate model.
+-            return self.has_view_permission(request, obj)
++            return self.has_change_permission_for_related_object(request, obj)
+         return super().has_add_permission(request)
+ 
+     def has_change_permission(self, request, obj=None):
+         if self.opts.auto_created:
+             # We're checking the rights to an auto-created intermediate model,
+             # which doesn't have its own individual permissions. The user needs
+-            # to have the view permission for the related model in order to
++            # to have the change permission for the related model in order to
+             # be able to do anything with the intermediate model.
+-            return self.has_view_permission(request, obj)
++            return self.has_change_permission_for_related_object(request, obj)
+         return super().has_change_permission(request)
+ 
+     def has_delete_permission(self, request, obj=None):
+         if self.opts.auto_created:
+             # We're checking the rights to an auto-created intermediate model,
+             # which doesn't have its own individual permissions. The user needs
+-            # to have the view permission for the related model in order to
++            # to have the change permission for the related model in order to
+             # be able to do anything with the intermediate model.
+-            return self.has_view_permission(request, obj)
++            return self.has_change_permission_for_related_object(request, obj)
+         return super().has_delete_permission(request, obj)
+ 
+     def has_view_permission(self, request, obj=None):
+         if self.opts.auto_created:
+-            opts = self.opts
+-            # The model was auto-created as intermediary for a many-to-many
+-            # Many-relationship; find the target model.
+-            for field in opts.fields:
+-                if field.remote_field and field.remote_field.model != self.parent_model:
+-                    opts = field.remote_field.model._meta
+-                    break
++            opts = self._get_related_object_opts()
+             return (
+                 request.user.has_perm('%s.%s' % (opts.app_label, get_permission_codename('view', opts))) or
+                 request.user.has_perm('%s.%s' % (opts.app_label, get_permission_codename('change', opts)))
+             )
+         return super().has_view_permission(request)
+ 
++    def has_change_permission_for_related_object(self, request, obj=None):
++        if self.opts.auto_created:
++            opts = self._get_related_object_opts()
++            return request.user.has_perm('%s.%s' % (opts.app_label, get_permission_codename('change', opts)))
++        return super().has_change_permission(request, obj)
++
+ 
+ class StackedInline(InlineModelAdmin):
+     template = 'admin/edit_inline/stacked.html'
+diff --git a/tests/admin_inlines/tests.py b/tests/admin_inlines/tests.py
+index 5272d44f35..1a35628bb0 100644
+--- a/tests/admin_inlines/tests.py
++++ b/tests/admin_inlines/tests.py
+@@ -682,6 +682,22 @@ class TestInlinePermissions(TestCase):
+         )
+         self.assertContains(response, 'id="id_Author_books-0-DELETE"')
+ 
++    def test_inline_change_m2m_view_perm(self):
++        permission = Permission.objects.get(codename='view_book', content_type=self.book_ct)
++        self.user.user_permissions.add(permission)
++        response = self.client.get(self.author_change_url)
++        # User with view-only permission on books can see the inline but it
++        # must not be editable (regression test for #30278).
++        inline_admin_formsets = response.context['inline_admin_formsets']
++        book_inline = inline_admin_formsets[0]
++        self.assertTrue(book_inline.has_view_permission)
++        self.assertFalse(book_inline.has_change_permission)
++        self.assertFalse(book_inline.has_add_permission)
++        self.assertFalse(book_inline.has_delete_permission)
++        self.assertContains(response, '<h2>Author-book relationships</h2>')
++        self.assertNotContains(response, 'Add another Author-book relationship')
++        self.assertNotContains(response, 'id="id_Author_books-0-DELETE"')
++
+     def test_inline_change_fk_add_perm(self):
+         permission = Permission.objects.get(codename='add_inner2', content_type=self.inner_ct)
+         self.user.user_permissions.add(permission)

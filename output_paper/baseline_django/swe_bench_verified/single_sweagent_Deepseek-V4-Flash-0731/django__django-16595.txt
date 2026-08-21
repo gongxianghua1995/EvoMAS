@@ -1,0 +1,40 @@
+diff --git a/django/db/migrations/operations/fields.py b/django/db/migrations/operations/fields.py
+index cd3aab43ad..e2682aeac0 100644
+--- a/django/db/migrations/operations/fields.py
++++ b/django/db/migrations/operations/fields.py
+@@ -264,6 +264,10 @@ class AlterField(FieldOperation):
+                     field=self.field,
+                 ),
+             ]
++        elif isinstance(operation, AlterField) and self.is_same_field_operation(
++            operation
++        ):
++            return [operation]
+         return super().reduce(operation, app_label)
+ 
+ 
+diff --git a/tests/migrations/test_optimizer.py b/tests/migrations/test_optimizer.py
+index 6485009eb4..9c6397d2ed 100644
+--- a/tests/migrations/test_optimizer.py
++++ b/tests/migrations/test_optimizer.py
+@@ -822,6 +822,20 @@ class OptimizerTests(SimpleTestCase):
+             ],
+         )
+ 
++    def test_alter_field_alter_field(self):
++        """
++        AlterField should optimize into AlterField.
++        """
++        self.assertOptimizesTo(
++            [
++                migrations.AlterField("Foo", "name", models.CharField(max_length=200)),
++                migrations.AlterField("Foo", "name", models.CharField(max_length=250)),
++            ],
++            [
++                migrations.AlterField("Foo", "name", models.CharField(max_length=250)),
++            ],
++        )
++
+     def _test_create_alter_foo_field(self, alter):
+         """
+         CreateModel, AlterFooTogether/AlterOrderWithRespectTo followed by an

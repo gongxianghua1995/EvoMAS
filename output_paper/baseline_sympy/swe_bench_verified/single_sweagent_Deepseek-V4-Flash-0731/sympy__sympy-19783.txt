@@ -1,0 +1,62 @@
+diff --git a/sympy/physics/quantum/dagger.py b/sympy/physics/quantum/dagger.py
+index 17da3cfd2c..71108f363f 100644
+--- a/sympy/physics/quantum/dagger.py
++++ b/sympy/physics/quantum/dagger.py
+@@ -85,5 +85,17 @@ def __new__(cls, arg):
+             return obj
+         return Expr.__new__(cls, arg)
+ 
++    def __mul__(self, other):
++        from sympy.physics.quantum.operator import IdentityOperator
++        if isinstance(other, IdentityOperator):
++            return self
++        return super(Dagger, self).__mul__(other)
++
++    def __rmul__(self, other):
++        from sympy.physics.quantum.operator import IdentityOperator
++        if isinstance(other, IdentityOperator):
++            return self
++        return super(Dagger, self).__rmul__(other)
++
+ adjoint.__name__ = "Dagger"
+ adjoint._sympyrepr = lambda a, b: "Dagger(%s)" % b._print(a.args[0])
+diff --git a/sympy/physics/quantum/operator.py b/sympy/physics/quantum/operator.py
+index 306bfee64f..75a124306a 100644
+--- a/sympy/physics/quantum/operator.py
++++ b/sympy/physics/quantum/operator.py
+@@ -307,11 +307,18 @@ def _print_contents_latex(self, printer, *args):
+ 
+     def __mul__(self, other):
+ 
+-        if isinstance(other, Operator):
++        if not getattr(other, 'is_commutative', True):
+             return other
+ 
+         return Mul(self, other)
+ 
++    def __rmul__(self, other):
++
++        if not getattr(other, 'is_commutative', True):
++            return other
++
++        return Mul(other, self)
++
+     def _represent_default_basis(self, **options):
+         if not self.N or self.N == oo:
+             raise NotImplementedError('Cannot represent infinite dimensional' +
+diff --git a/sympy/physics/quantum/tests/test_dagger.py b/sympy/physics/quantum/tests/test_dagger.py
+index bcc8a28f58..74cd1c3bfe 100644
+--- a/sympy/physics/quantum/tests/test_dagger.py
++++ b/sympy/physics/quantum/tests/test_dagger.py
+@@ -66,3 +66,11 @@ def test_scipy_sparse_dagger():
+     a = sparse.csr_matrix([[1.0 + 0.0j, 2.0j], [-1.0j, 2.0 + 0.0j]])
+     adag = a.copy().transpose().conjugate()
+     assert np.linalg.norm((Dagger(a) - adag).todense()) == 0.0
++
++
++def test_dagger_identity_operator():
++    from sympy.physics.quantum.operator import Operator, IdentityOperator
++    A = Operator('A')
++    I = IdentityOperator()
++    assert Dagger(A)*I == Dagger(A)
++    assert I*Dagger(A) == Dagger(A)

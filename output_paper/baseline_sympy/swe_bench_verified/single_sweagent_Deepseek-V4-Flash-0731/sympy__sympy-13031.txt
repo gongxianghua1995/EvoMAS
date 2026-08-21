@@ -1,0 +1,76 @@
+diff --git a/sympy/matrices/sparse.py b/sympy/matrices/sparse.py
+index e6f36cdf35..7030594f25 100644
+--- a/sympy/matrices/sparse.py
++++ b/sympy/matrices/sparse.py
+@@ -946,7 +946,7 @@ def col_del(self, k):
+         self._smat = newD
+         self.cols -= 1
+ 
+-    def col_join(self, other):
++    def _eval_col_join(self, other):
+         """Returns B augmented beneath A (row-wise joining)::
+ 
+             [A]
+@@ -985,11 +985,7 @@ def col_join(self, other):
+         >>> C == A.row_insert(A.rows, Matrix(B))
+         True
+         """
+-        if not self:
+-            return type(self)(other)
+         A, B = self, other
+-        if not A.cols == B.cols:
+-            raise ShapeError()
+         A = A.copy()
+         if not isinstance(B, SparseMatrix):
+             k = 0
+@@ -1156,7 +1152,7 @@ def row_del(self, k):
+         self._smat = newD
+         self.rows -= 1
+ 
+-    def row_join(self, other):
++    def _eval_row_join(self, other):
+         """Returns B appended after A (column-wise augmenting)::
+ 
+             [A B]
+@@ -1191,11 +1187,7 @@ def row_join(self, other):
+         >>> C == A.col_insert(A.cols, B)
+         True
+         """
+-        if not self:
+-            return type(self)(other)
+         A, B = self, other
+-        if not A.rows == B.rows:
+-            raise ShapeError()
+         A = A.copy()
+         if not isinstance(B, SparseMatrix):
+             k = 0
+diff --git a/sympy/matrices/tests/test_sparse.py b/sympy/matrices/tests/test_sparse.py
+index acea940281..29cf86af9d 100644
+--- a/sympy/matrices/tests/test_sparse.py
++++ b/sympy/matrices/tests/test_sparse.py
+@@ -587,3 +587,25 @@ def test_hermitian():
+     assert a.is_hermitian is None
+     a[0, 1] = a[1, 0]*I
+     assert a.is_hermitian is False
++
++
++def test_issue_12961():
++    # hstack and vstack of matrices with zero rows/columns
++    # should preserve the widths/heights of all matrices
++    matrices = [SparseMatrix.zeros(0, n) for n in range(4)]
++    assert SparseMatrix.hstack(*matrices).shape == (0, 6)
++
++    matrices = [SparseMatrix.zeros(n, 0) for n in range(4)]
++    assert SparseMatrix.vstack(*matrices).shape == (6, 0)
++
++    M1 = SparseMatrix.zeros(0, 0)
++    M2 = SparseMatrix.zeros(0, 1)
++    M3 = SparseMatrix.zeros(0, 2)
++    M4 = SparseMatrix.zeros(0, 3)
++    assert SparseMatrix.hstack(M1, M2, M3, M4).shape == (0, 6)
++
++    V1 = SparseMatrix.zeros(0, 0)
++    V2 = SparseMatrix.zeros(1, 0)
++    V3 = SparseMatrix.zeros(2, 0)
++    V4 = SparseMatrix.zeros(3, 0)
++    assert SparseMatrix.vstack(V1, V2, V3, V4).shape == (6, 0)

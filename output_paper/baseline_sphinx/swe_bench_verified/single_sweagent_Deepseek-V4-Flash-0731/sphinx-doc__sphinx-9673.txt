@@ -1,0 +1,52 @@
+diff --git a/sphinx/ext/autodoc/typehints.py b/sphinx/ext/autodoc/typehints.py
+index af4b47bb0..97fe2d670 100644
+--- a/sphinx/ext/autodoc/typehints.py
++++ b/sphinx/ext/autodoc/typehints.py
+@@ -149,7 +149,7 @@ def augment_descriptions_with_types(
+         elif parts[0] == 'type':
+             name = ' '.join(parts[1:])
+             has_type.add(name)
+-        elif parts[0] == 'return':
++        elif parts[0] in ('return', 'returns'):
+             has_description.add('return')
+         elif parts[0] == 'rtype':
+             has_type.add('return')
+diff --git a/tests/test_ext_autodoc_configs.py b/tests/test_ext_autodoc_configs.py
+index f6436f541..ef1675181 100644
+--- a/tests/test_ext_autodoc_configs.py
++++ b/tests/test_ext_autodoc_configs.py
+@@ -866,6 +866,34 @@ def test_autodoc_typehints_description_no_undoc(app):
+             in context)
+ 
+ 
++@pytest.mark.sphinx('text', testroot='ext-autodoc',
++                    confoverrides={'autodoc_typehints': "description",
++                                   'autodoc_typehints_description_target': 'documented'})
++def test_autodoc_typehints_description_no_undoc_with_returns(app):
++    # ``:returns:`` (used by napoleon) should be treated as a description of
++    # the return value, so ``:rtype:`` is injected.
++    (app.srcdir / 'index.rst').write_text(
++        '.. autofunction:: target.typehints.incr\n'
++        '\n'
++        '.. autofunction:: target.typehints.tuple_args\n'
++        '\n'
++        '   :param x: arg\n'
++        '   :returns: another tuple\n'
++    )
++    app.build()
++    context = (app.outdir / 'index.txt').read_text()
++    assert ('target.typehints.tuple_args(x)\n'
++            '\n'
++            '   Parameters:\n'
++            '      **x** (*Tuple**[**int**, **Union**[**int**, **str**]**]*) -- arg\n'
++            '\n'
++            '   Returns:\n'
++            '      another tuple\n'
++            '\n'
++            '   Return type:\n'
++            '      Tuple[int, int]\n'
++            in context)
++
+ @pytest.mark.sphinx('text', testroot='ext-autodoc',
+                     confoverrides={'autodoc_typehints': "description"})
+ def test_autodoc_typehints_description_with_documented_init(app):

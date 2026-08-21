@@ -1,0 +1,18 @@
+diff --git a/django/urls/resolvers.py b/django/urls/resolvers.py
+index af0508f94e..2706bc4c8e 100644
+--- a/django/urls/resolvers.py
++++ b/django/urls/resolvers.py
+@@ -605,6 +605,14 @@ class URLResolver:
+         if args and kwargs:
+             raise ValueError("Don't mix *args and **kwargs in call to reverse()!")
+ 
++        # resolve() returns None for optional capture groups that aren't
++        # included in the match. Discard such arguments so that reverse()
++        # doesn't turn them into the literal string 'None'.
++        if args:
++            args = [arg for arg in args if arg is not None]
++        else:
++            kwargs = {k: v for k, v in kwargs.items() if v is not None}
++
+         if not self._populated:
+             self._populate()

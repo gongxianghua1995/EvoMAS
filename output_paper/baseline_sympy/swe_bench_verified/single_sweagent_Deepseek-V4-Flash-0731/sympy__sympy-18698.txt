@@ -1,0 +1,94 @@
+diff --git a/sympy/polys/polytools.py b/sympy/polys/polytools.py
+index c9e77a901f..c3e4f63bb3 100644
+--- a/sympy/polys/polytools.py
++++ b/sympy/polys/polytools.py
+@@ -5895,6 +5895,36 @@ def _factors_product(factors):
+     return Mul(*[f.as_expr()**k for f, k in factors])
+ 
+ 
++def _sqf_combine_factors(factors):
++    """Combine factors of the same multiplicity in a square-free factorization.
++
++    All factors that appear with the same multiplicity are multiplied together
++    into a single factor.  For example, ``(x - 2)`` and ``(x - 3)`` both with
++    multiplicity ``3`` are combined to give ``x**2 - 5*x + 6`` with
++    multiplicity ``3``.  This makes the result of :func:`sqf_list` consistent
++    with :meth:`Poly.sqf_list` which groups equal powers together.
++    """
++    if len(factors) < 2:
++        return factors
++
++    result, groups = [], {}
++    for f, k in factors:
++        if isinstance(k, (int, Integer)):
++            groups.setdefault(k, []).append(f)
++        else:
++            result.append((f, k))
++
++    for k in sorted(groups):
++        fs = groups[k]
++        if len(fs) > 1:
++            factors = [f.as_expr() if hasattr(f, 'as_expr') else f for f in fs]
++            result.append((Mul(*factors).expand(), k))
++        else:
++            result.append((fs[0], k))
++
++    return result
++
++
+ def _symbolic_factor_list(expr, opt, method):
+     """Helper function for :func:`_symbolic_factor`. """
+     coeff, factors = S.One, []
+@@ -5950,6 +5980,9 @@ def _symbolic_factor_list(expr, opt, method):
+ 
+                 factors.append((_factors_product(other), exp))
+ 
++    if method == 'sqf':
++        factors = _sqf_combine_factors(factors)
++
+     return coeff, factors
+ 
+ 
+@@ -6205,6 +6238,12 @@ def sqf_list(f, *gens, **args):
+     """
+     Compute a list of square-free factors of ``f``.
+ 
++    The input is treated as a univariate polynomial.  If more than one
++    generator is present, an error may be raised or the result may be
++    indeterminate, so it is recommended to give the generator explicitly.
++
++    All factors of the same multiplicity are combined into a single factor.
++
+     Examples
+     ========
+ 
+@@ -6214,6 +6253,9 @@ def sqf_list(f, *gens, **args):
+     >>> sqf_list(2*x**5 + 16*x**4 + 50*x**3 + 76*x**2 + 56*x + 16)
+     (2, [(x + 1, 2), (x + 2, 3)])
+ 
++    >>> sqf_list((x**2 + 1)*(x - 1)**2*(x - 2)**3*(x - 3)**3)
++    (1, [(x**2 + 1, 1), (x - 1, 2), (x**2 - 5*x + 6, 3)])
++
+     """
+     return _generic_factor_list(f, gens, args, method='sqf')
+ 
+@@ -6223,6 +6265,10 @@ def sqf(f, *gens, **args):
+     """
+     Compute square-free factorization of ``f``.
+ 
++    The input is treated as a univariate polynomial.  If more than one
++    generator is present, an error may be raised or the result may be
++    indeterminate, so it is recommended to give the generator explicitly.
++
+     Examples
+     ========
+ 
+@@ -6232,6 +6278,9 @@ def sqf(f, *gens, **args):
+     >>> sqf(2*x**5 + 16*x**4 + 50*x**3 + 76*x**2 + 56*x + 16)
+     2*(x + 1)**2*(x + 2)**3
+ 
++    >>> sqf((x**2 + 1)*(x - 1)**2*(x - 2)**3*(x - 3)**3)
++    (x**2 + 1)*(x - 1)**2*(x**2 - 5*x + 6)**3
++
+     """
+     return _generic_factor(f, gens, args, method='sqf')

@@ -1,0 +1,13 @@
+diff --git a/django/core/management/base.py b/django/core/management/base.py
+index e6cbf8c64f..9abc7089fe 100644
+--- a/django/core/management/base.py
++++ b/django/core/management/base.py
+@@ -140,6 +140,9 @@ class OutputWrapper(TextIOBase):
+     def __getattr__(self, name):
+         return getattr(self._out, name)
+ 
++    def flush(self):
++        self._out.flush()
++
+     def isatty(self):
+         return hasattr(self._out, 'isatty') and self._out.isatty()

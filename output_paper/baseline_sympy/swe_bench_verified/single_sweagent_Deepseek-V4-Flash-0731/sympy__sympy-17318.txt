@@ -1,0 +1,100 @@
+diff --git a/repro_issue.py b/repro_issue.py
+new file mode 100644
+index 0000000000..383a68530e
+--- /dev/null
++++ b/repro_issue.py
+@@ -0,0 +1,13 @@
++from sympy import sqrt, I, cbrt
++from sympy.simplify.sqrtdenest import sqrtdenest
++from sympy.simplify.radsimp import rad_rationalize
++
++print("sqrtdenest:", sqrtdenest(3 - sqrt(2)*sqrt(4 + I) + 3*I))
++try:
++    print("rad_rationalize:", rad_rationalize(1, 4 + I))
++except Exception as e:
++    print("rad_rationalize ERROR:", type(e).__name__, e)
++try:
++    print("rad_rationalize cbrt:", rad_rationalize(1, 1 + cbrt(2)))
++except Exception as e:
++    print("rad_rationalize cbrt ERROR:", type(e).__name__, e)
+diff --git a/sympy/simplify/radsimp.py b/sympy/simplify/radsimp.py
+index 216ae26204..ab1bd0eab1 100644
+--- a/sympy/simplify/radsimp.py
++++ b/sympy/simplify/radsimp.py
+@@ -933,6 +933,8 @@ def rad_rationalize(num, den):
+     if not den.is_Add:
+         return num, den
+     g, a, b = split_surds(den)
++    if not a:
++        return num, den
+     a = a*sqrt(g)
+     num = _mexpand((a - b)*num)
+     den = _mexpand(a**2 - b**2)
+@@ -1077,6 +1079,8 @@ def split_surds(expr):
+     coeff_muls = [x.as_coeff_Mul() for x in args]
+     surds = [x[1]**2 for x in coeff_muls if x[1].is_Pow]
+     surds.sort(key=default_sort_key)
++    if not surds:
++        return S.One, S.Zero, expr
+     g, b1, b2 = _split_gcd(*surds)
+     g2 = g
+     if not b2 and len(b1) >= 2:
+diff --git a/sympy/simplify/sqrtdenest.py b/sympy/simplify/sqrtdenest.py
+index f0b7653ea8..e437987d83 100644
+--- a/sympy/simplify/sqrtdenest.py
++++ b/sympy/simplify/sqrtdenest.py
+@@ -156,7 +156,8 @@ def _sqrt_match(p):
+         res = (p, S.Zero, S.Zero)
+     elif p.is_Add:
+         pargs = sorted(p.args, key=default_sort_key)
+-        if all((x**2).is_Rational for x in pargs):
++        sqargs = [x**2 for x in pargs]
++        if all(sq.is_Rational and sq.is_positive for sq in sqargs):
+             r, b, a = split_surds(p)
+             res = a, b, r
+             return list(res)
+diff --git a/sympy/simplify/tests/test_radsimp.py b/sympy/simplify/tests/test_radsimp.py
+index 0dafe9896c..314ece22c0 100644
+--- a/sympy/simplify/tests/test_radsimp.py
++++ b/sympy/simplify/tests/test_radsimp.py
+@@ -1,7 +1,7 @@
+ from sympy import (
+     sqrt, Derivative, symbols, collect, Function, factor, Wild, S,
+     collect_const, log, fraction, I, cos, Add, O,sin, rcollect,
+-    Mul, radsimp, diff, root, Symbol, Rational, exp)
++    Mul, radsimp, diff, root, Symbol, Rational, exp, cbrt)
+ 
+ from sympy.core.mul import _unevaluated_Mul as umul
+ from sympy.simplify.radsimp import _unevaluated_Add, collect_sqrt, fraction_expand
+@@ -423,3 +423,10 @@ def test_issue_14608():
+     raises(AttributeError, lambda: collect(a*b + b*a, a))
+     assert collect(x*y + y*(x+1), a) == x*y + y*(x+1)
+     assert collect(x*y + y*(x+1) + a*b + b*a, y) == y*(2*x + 1) + a*b + b*a
++
++
++def test_rad_rationalize():
++    from sympy.simplify.radsimp import rad_rationalize
++    # no surds to remove; expression should be returned unchanged
++    assert rad_rationalize(1, 4 + I) == (1, 4 + I)
++    assert rad_rationalize(1, 1 + cbrt(2)) == (1, 1 + cbrt(2))
+diff --git a/sympy/simplify/tests/test_sqrtdenest.py b/sympy/simplify/tests/test_sqrtdenest.py
+index c30f7a3235..ec6860e6ca 100644
+--- a/sympy/simplify/tests/test_sqrtdenest.py
++++ b/sympy/simplify/tests/test_sqrtdenest.py
+@@ -1,4 +1,4 @@
+-from sympy import sqrt, root, S, Symbol, sqrtdenest, Integral, cos
++from sympy import sqrt, root, S, Symbol, sqrtdenest, Integral, cos, I
+ from sympy.simplify.sqrtdenest import _subsets as subsets
+ from sympy.utilities.pytest import slow
+ 
+@@ -183,3 +183,10 @@ def test_issue_5653():
+ 
+ def test_sqrt_ratcomb():
+     assert sqrtdenest(sqrt(1 + r3) + sqrt(3 + 3*r3) - sqrt(10 + 6*r3)) == 0
++
++
++def test_issue_12420():
++    # expression cannot be denested; should be returned unchanged
++    e = 3 - sqrt(2)*sqrt(4 + I) + 3*I
++    assert sqrtdenest(e) == e
++    assert sqrtdenest(sqrt(4 + I)) == sqrt(4 + I)

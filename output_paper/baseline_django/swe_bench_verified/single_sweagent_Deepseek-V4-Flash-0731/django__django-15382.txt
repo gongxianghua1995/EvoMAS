@@ -1,0 +1,48 @@
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+index 81f8f79c71..392aec6593 100644
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -1211,13 +1211,19 @@ class Exists(Subquery):
+ 
+     def as_sql(self, compiler, connection, template=None, **extra_context):
+         query = self.query.exists(using=connection.alias)
+-        sql, params = super().as_sql(
+-            compiler,
+-            connection,
+-            template=template,
+-            query=query,
+-            **extra_context,
+-        )
++        try:
++            sql, params = super().as_sql(
++                compiler,
++                connection,
++                template=template,
++                query=query,
++                **extra_context,
++            )
++        except EmptyResultSet:
++            if self.negated:
++                # A negated EXISTS with an empty queryset is always true.
++                return '%s = %s', (1, 1)
++            raise
+         if self.negated:
+             sql = 'NOT {}'.format(sql)
+         return sql, params
+diff --git a/tests/expressions/tests.py b/tests/expressions/tests.py
+index 5cf9dd1ea5..5d902c86e8 100644
+--- a/tests/expressions/tests.py
++++ b/tests/expressions/tests.py
+@@ -1905,6 +1905,13 @@ class ExistsTests(TestCase):
+         )
+         self.assertNotIn('ORDER BY', captured_sql)
+ 
++    def test_negated_empty_exists(self):
++        manager = Manager.objects.create()
++        qs = Manager.objects.filter(
++            ~Exists(Manager.objects.none()), pk=manager.pk
++        )
++        self.assertQuerysetEqual(qs, Manager.objects.filter(pk=manager.pk))
++
+ 
+ class FieldTransformTests(TestCase):

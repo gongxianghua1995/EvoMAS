@@ -1,12 +1,13 @@
-name: single_sweagent_swebench
+name: single_minisweagent_swebench
 description: Single mini-swe-agent for SWE-bench
-backend: sweagent
+backend: minisweagent
 agents:
   worker:
     id: worker
     role: worker
-    agent_type: SWEAgent
-    model_id: bedrock:qwen.qwen3-235b-a22b-2507-v1:0
+    backend: minisweagent
+    agent_type: DefaultAgent
+    model_id: openai:Deepseek-V4-Flash-0731
     prompt: worker
     tools: []
     max_tokens: 8192

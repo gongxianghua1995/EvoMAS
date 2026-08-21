@@ -1,0 +1,114 @@
+diff --git a/django/conf/global_settings.py b/django/conf/global_settings.py
+index 09c9b95d26..8bb59a4037 100644
+--- a/django/conf/global_settings.py
++++ b/django/conf/global_settings.py
+@@ -637,6 +637,6 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+ SECURE_HSTS_PRELOAD = False
+ SECURE_HSTS_SECONDS = 0
+ SECURE_REDIRECT_EXEMPT = []
+-SECURE_REFERRER_POLICY = None
++SECURE_REFERRER_POLICY = 'same-origin'
+ SECURE_SSL_HOST = None
+ SECURE_SSL_REDIRECT = False
+diff --git a/django/core/checks/security/base.py b/django/core/checks/security/base.py
+index b69c2a11da..e1d2b2891f 100644
+--- a/django/core/checks/security/base.py
++++ b/django/core/checks/security/base.py
+@@ -102,12 +102,6 @@ W021 = Warning(
+     id='security.W021',
+ )
+ 
+-W022 = Warning(
+-    'You have not set the SECURE_REFERRER_POLICY setting. Without this, your '
+-    'site will not send a Referrer-Policy header. You should consider '
+-    'enabling this header to protect user privacy.',
+-    id='security.W022',
+-)
+ 
+ E023 = Error(
+     'You have set the SECURE_REFERRER_POLICY setting to an invalid value.',
+@@ -213,8 +207,6 @@ def check_allowed_hosts(app_configs, **kwargs):
+ @register(Tags.security, deploy=True)
+ def check_referrer_policy(app_configs, **kwargs):
+     if _security_middleware():
+-        if settings.SECURE_REFERRER_POLICY is None:
+-            return [W022]
+         # Support a comma-separated string or iterable of values to allow fallback.
+         if isinstance(settings.SECURE_REFERRER_POLICY, str):
+             values = {v.strip() for v in settings.SECURE_REFERRER_POLICY.split(',')}
+diff --git a/docs/ref/checks.txt b/docs/ref/checks.txt
+index e7b0a5ec8c..28f405d3b6 100644
+--- a/docs/ref/checks.txt
++++ b/docs/ref/checks.txt
+@@ -431,9 +431,6 @@ The following checks are run if you use the :option:`check --deploy` option:
+ * **security.W021**: You have not set the
+   :setting:`SECURE_HSTS_PRELOAD` setting to ``True``. Without this, your site
+   cannot be submitted to the browser preload list.
+-* **security.W022**: You have not set the :setting:`SECURE_REFERRER_POLICY`
+-  setting. Without this, your site will not send a Referrer-Policy header. You
+-  should consider enabling this header to protect user privacy.
+ * **security.E023**: You have set the :setting:`SECURE_REFERRER_POLICY` setting
+   to an invalid value.
+ 
+diff --git a/docs/ref/settings.txt b/docs/ref/settings.txt
+index b4a5bdc48f..f3a516973c 100644
+--- a/docs/ref/settings.txt
++++ b/docs/ref/settings.txt
+@@ -2395,11 +2395,11 @@ from URL paths, so patterns shouldn't include them, e.g.
+ 
+ .. versionadded:: 3.0
+ 
+-Default: ``None``
++Default: ``'same-origin'``
+ 
+-If configured, the :class:`~django.middleware.security.SecurityMiddleware` sets
+-the :ref:`referrer-policy` header on all responses that do not already have it
+-to the value provided.
++The :class:`~django.middleware.security.SecurityMiddleware` sets the
++:ref:`referrer-policy` header on all responses that do not already have it to
++the value provided.
+ 
+ .. setting:: SECURE_SSL_HOST
+ 
+diff --git a/tests/check_framework/test_security.py b/tests/check_framework/test_security.py
+index 4c1869d272..60f0799b55 100644
+--- a/tests/check_framework/test_security.py
++++ b/tests/check_framework/test_security.py
+@@ -511,24 +511,10 @@ class CheckReferrerPolicyTest(SimpleTestCase):
+         from django.core.checks.security.base import check_referrer_policy
+         return check_referrer_policy
+ 
+-    @override_settings(
+-        MIDDLEWARE=['django.middleware.security.SecurityMiddleware'],
+-        SECURE_REFERRER_POLICY=None,
+-    )
+-    def test_no_referrer_policy(self):
+-        self.assertEqual(self.func(None), [base.W022])
+-
+-    @override_settings(MIDDLEWARE=[], SECURE_REFERRER_POLICY=None)
+-    def test_no_referrer_policy_no_middleware(self):
+-        """
+-        Don't warn if SECURE_REFERRER_POLICY is None and SecurityMiddleware
+-        isn't in MIDDLEWARE.
+-        """
+-        self.assertEqual(self.func(None), [])
+-
+     @override_settings(MIDDLEWARE=['django.middleware.security.SecurityMiddleware'])
+     def test_with_referrer_policy(self):
+         tests = (
++            'same-origin',
+             'strict-origin',
+             'strict-origin,origin',
+             'strict-origin, origin',
+diff --git a/tests/middleware/test_security.py b/tests/middleware/test_security.py
+index 07b72fc73a..27dc8dd7d3 100644
+--- a/tests/middleware/test_security.py
++++ b/tests/middleware/test_security.py
+@@ -237,6 +237,7 @@ class SecurityMiddlewareTest(SimpleTestCase):
+         "Referrer-Policy" header to the response.
+         """
+         tests = (
++            ('same-origin', 'same-origin'),
+             ('strict-origin', 'strict-origin'),
+             ('strict-origin,origin', 'strict-origin,origin'),
+             ('strict-origin, origin', 'strict-origin,origin'),

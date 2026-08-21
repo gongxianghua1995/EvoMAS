@@ -3,6 +3,7 @@ Runner for smolagents framework.
 """
 
 import logging
+import os
 import re
 import subprocess
 from typing import Any, Dict, Optional
@@ -12,6 +13,30 @@ from ..spec import AgentSpec, AgentResult
 from .base import BaseAgentRunner
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_model_id(model_id: str) -> str:
+    """Fallback a ``bedrock:`` model_id to ``EVO_MAS_FALLBACK_MODEL`` when boto3 is
+    unavailable, so MAS configs whose agents still carry Bedrock model_ids (e.g.
+    meta-model left them unchanged, or GENERATE fell back to the original pool
+    config) can still execute on non-AWS / OpenAI-compatible environments.
+
+    In AWS environments with boto3 installed this is a no-op.
+    """
+    if not (model_id or "").startswith("bedrock:"):
+        return model_id
+    try:
+        import boto3  # noqa: F401
+        return model_id
+    except ImportError:
+        fb = os.environ.get("EVO_MAS_FALLBACK_MODEL")
+        if fb:
+            logger.warning(
+                "boto3 unavailable: falling back agent model '%s' -> '%s'",
+                model_id, fb,
+            )
+            return fb
+        return model_id
 
 # Path to WorkBench custom prompts
 # __file__ is in src/agents/runners/smolagents.py
@@ -41,6 +66,12 @@ class SmolagentsRunner(BaseAgentRunner):
         match = re.search(r'Repository:\s*(/[^\s\n]+)', task)
         if match:
             return Path(match.group(1))
+        match = re.search(r'Repository:\s*([^\s/]+/([^\s/]+))', task)
+        if match:
+            repo_name = match.group(2)
+            candidate = Path("dataset/repos") / repo_name
+            if candidate.exists():
+                return candidate
         return None
 
     def _is_swebench_task(self, task: str) -> bool:
@@ -91,8 +122,9 @@ class SmolagentsRunner(BaseAgentRunner):
             model_params["device"] = spec.device
             logger.info(f"Using device: {spec.device} for model {spec.model_id}")
 
-        # Load the model
-        model = get_model(spec.model_id, **model_params)
+        # Load the model (fall back to EVO_MAS_FALLBACK_MODEL when a bedrock
+        # model_id cannot be instantiated because boto3 is missing)
+        model = get_model(_resolve_model_id(spec.model_id), **model_params)
 
         # Determine agent class
         agent_class = CodeAgent
@@ -149,8 +181,9 @@ class SmolagentsRunner(BaseAgentRunner):
                 model_params["device"] = spec.device
                 logger.info(f"Using device: {spec.device} for model {spec.model_id}")
 
-            # Load the model
-            model = get_model(spec.model_id, **model_params)
+            # Load the model (fall back to EVO_MAS_FALLBACK_MODEL when a bedrock
+            # model_id cannot be instantiated because boto3 is missing)
+            model = get_model(_resolve_model_id(spec.model_id), **model_params)
 
             # Create the agent (CodeAgent or ToolCallingAgent)
             agent_class = CodeAgent

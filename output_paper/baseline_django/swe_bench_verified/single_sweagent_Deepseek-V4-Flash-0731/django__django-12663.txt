@@ -1,0 +1,42 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+index 9fe0c9a656..c38036a406 100644
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -233,7 +233,8 @@ class Query(BaseExpression):
+     @property
+     def output_field(self):
+         if len(self.select) == 1:
+-            return self.select[0].field
++            select = self.select[0]
++            return getattr(select, "target", select.field)
+         elif len(self.annotation_select) == 1:
+             return next(iter(self.annotation_select.values())).output_field
+ 
+diff --git a/tests/expressions/tests.py b/tests/expressions/tests.py
+index 0fac4642f7..63c3f6fe3e 100644
+--- a/tests/expressions/tests.py
++++ b/tests/expressions/tests.py
+@@ -21,6 +21,7 @@ from django.db.models.sql import constants
+ from django.db.models.sql.datastructures import Join
+ from django.test import SimpleTestCase, TestCase, skipUnlessDBFeature
+ from django.test.utils import Approximate, isolate_apps
++from django.utils.functional import SimpleLazyObject
+ 
+ from .models import (
+     UUID, UUIDPK, Company, Employee, Experiment, Number, RemoteEmployee,
+@@ -608,6 +609,15 @@ class BasicExpressionsTests(TestCase):
+         )
+         self.assertEqual(qs.get().float, 1.2)
+ 
++    def test_subquery_filter_by_lazy(self):
++        test_ceo = SimpleLazyObject(lambda: self.foobar_ltd.ceo)
++        qs = Employee.objects.annotate(
++            related=Subquery(
++                Company.objects.filter(ceo=OuterRef('pk')).values('ceo'),
++            ),
++        ).filter(related=test_ceo)
++        self.assertEqual(qs.get(), self.foobar_ltd.ceo)
++
+     def test_aggregate_subquery_annotation(self):
+         with self.assertNumQueries(1) as ctx:
+             aggregate = Company.objects.annotate(

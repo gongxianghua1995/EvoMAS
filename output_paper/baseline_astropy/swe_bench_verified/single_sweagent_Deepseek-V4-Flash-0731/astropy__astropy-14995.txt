@@ -1,0 +1,61 @@
+diff --git a/astropy/nddata/mixins/ndarithmetic.py b/astropy/nddata/mixins/ndarithmetic.py
+index 4153dfccb2..f5ffc0dbbf 100644
+--- a/astropy/nddata/mixins/ndarithmetic.py
++++ b/astropy/nddata/mixins/ndarithmetic.py
+@@ -520,7 +520,7 @@ class NDArithmeticMixin:
+         elif self.mask is None and operand is not None:
+             # Make a copy so there is no reference in the result.
+             return deepcopy(operand.mask)
+-        elif operand is None:
++        elif operand.mask is None:
+             return deepcopy(self.mask)
+         else:
+             # Now lets calculate the resulting mask (operation enforces copy)
+diff --git a/astropy/nddata/mixins/tests/test_ndarithmetic.py b/astropy/nddata/mixins/tests/test_ndarithmetic.py
+index 8c461155ab..9be3a7b6a8 100644
+--- a/astropy/nddata/mixins/tests/test_ndarithmetic.py
++++ b/astropy/nddata/mixins/tests/test_ndarithmetic.py
+@@ -314,11 +314,38 @@ def test_arithmetics_data_masks_invalid():
+         nd1.divide(nd2)
+ 
+ 
+-# Covering:
+-# both have uncertainties (data and uncertainty without unit)
+-# tested against manually determined resulting uncertainties to verify the
+-# implemented formulas
+-# this test only works as long as data1 and data2 do not contain any 0
++# Regression test for https://github.com/astropy/astropy/issues/15076
++# When one operand has a mask and the other does not, arithmetic should
++# simply propagate the existing mask rather than calling ``handle_mask``
++# with a ``None`` mask (which fails for operations like ``np.bitwise_or``
++# and produces object arrays full of ``None`` for boolean masks).
++def test_arithmetics_data_masks_one_missing():
++    nd_nomask = NDDataArithmetic(1)
++    nd_mask = NDDataArithmetic(
++        1, mask=np.array([[0, 1, 64], [8, 0, 1], [2, 1, 0]])
++    )
++    # mask * no mask and no mask * mask with a custom mask handler
++    res = nd_mask.multiply(nd_nomask, handle_mask=np.bitwise_or)
++    assert_array_equal(res.mask, nd_mask.mask)
++    res = nd_nomask.multiply(nd_mask, handle_mask=np.bitwise_or)
++    assert_array_equal(res.mask, nd_mask.mask)
++    # mask * scalar (no mask on operand) works the same way
++    res = nd_mask.multiply(1.0, handle_mask=np.bitwise_or)
++    assert_array_equal(res.mask, nd_mask.mask)
++    # also check with boolean masks and the default mask handling
++    bmask = np.array(
++        [[True, False, False], [False, True, False], [False, False, True]]
++    )
++    nd_bmask = NDDataArithmetic(1, mask=bmask)
++    nd_bmask2 = NDDataArithmetic(1, mask=None)
++    res = nd_bmask.multiply(nd_bmask2)
++    assert res.mask.dtype == np.bool_
++    assert_array_equal(res.mask, bmask)
++    res = nd_bmask2.multiply(nd_bmask)
++    assert res.mask.dtype == np.bool_
++    assert_array_equal(res.mask, bmask)
++
++
+ def test_arithmetics_stddevuncertainty_basic():
+     nd1 = NDDataArithmetic([1, 2, 3], uncertainty=StdDevUncertainty([1, 1, 3]))
+     nd2 = NDDataArithmetic([2, 2, 2], uncertainty=StdDevUncertainty([2, 2, 2]))

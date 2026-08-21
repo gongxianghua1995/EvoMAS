@@ -1,0 +1,52 @@
+diff --git a/django/db/backends/ddl_references.py b/django/db/backends/ddl_references.py
+index 44e49806f8..a0b7d12062 100644
+--- a/django/db/backends/ddl_references.py
++++ b/django/db/backends/ddl_references.py
+@@ -114,9 +114,12 @@ class IndexColumns(Columns):
+             # length as self.columns.
+             col = '{} {}'.format(self.quote_name(column), self.opclasses[idx])
+             try:
+-                col = '{} {}'.format(col, self.col_suffixes[idx])
++                suffix = self.col_suffixes[idx]
+             except IndexError:
+                 pass
++            else:
++                if suffix:
++                    col = '{} {}'.format(col, suffix)
+             return col
+ 
+         return ', '.join(col_str(column, idx) for idx, column in enumerate(self.columns))
+diff --git a/tests/indexes/tests.py b/tests/indexes/tests.py
+index 588feaddff..653ed42eb5 100644
+--- a/tests/indexes/tests.py
++++ b/tests/indexes/tests.py
+@@ -151,6 +151,18 @@ class SchemaIndexesPostgreSQLTests(TransactionTestCase):
+             cursor.execute(self.get_opclass_query % 'test_ops_class')
+             self.assertEqual(cursor.fetchall(), [('varchar_pattern_ops', 'test_ops_class')])
+ 
++    def test_ops_class_ascending(self):
++        index = Index(
++            name='test_ops_class_ascending',
++            fields=['body'],
++            opclasses=['text_pattern_ops'],
++        )
++        with connection.schema_editor() as editor:
++            self.assertIn(
++                '("body" text_pattern_ops)',
++                str(index.create_sql(IndexedArticle2, editor)),
++            )
++
+     def test_ops_class_multiple_columns(self):
+         index = Index(
+             name='test_ops_class_multiple',
+@@ -204,6 +216,10 @@ class SchemaIndexesPostgreSQLTests(TransactionTestCase):
+             opclasses=['text_pattern_ops'],
+         )
+         with connection.schema_editor() as editor:
++            self.assertIn(
++                '("body" text_pattern_ops DESC)',
++                str(index.create_sql(IndexedArticle2, editor)),
++            )
+             editor.add_index(IndexedArticle2, index)
+         with editor.connection.cursor() as cursor:
+             cursor.execute(self.get_opclass_query % indexname)

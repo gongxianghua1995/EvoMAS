@@ -1,0 +1,157 @@
+diff --git a/django/utils/autoreload.py b/django/utils/autoreload.py
+index b8efb9f881..077cef8f39 100644
+--- a/django/utils/autoreload.py
++++ b/django/utils/autoreload.py
+@@ -216,14 +216,13 @@ def get_child_arguments():
+     executable is reported to not have the .exe extension which can cause bugs
+     on reloading.
+     """
+-    import django.__main__
+-    django_main_path = Path(django.__main__.__file__)
++    import __main__
+     py_script = Path(sys.argv[0])
+ 
+     args = [sys.executable] + ['-W%s' % o for o in sys.warnoptions]
+-    if py_script == django_main_path:
++    if __main__.__spec__ is not None and __main__.__spec__.parent:
+         # The server was started with `python -m django runserver`.
+-        args += ['-m', 'django']
++        args += ['-m', __main__.__spec__.parent]
+         args += sys.argv[1:]
+     elif not py_script.exists():
+         # sys.argv[0] may not exist for several reasons on Windows.
+diff --git a/tests/utils_tests/test_autoreload.py b/tests/utils_tests/test_autoreload.py
+index b9f2db7276..e773b33dc2 100644
+--- a/tests/utils_tests/test_autoreload.py
++++ b/tests/utils_tests/test_autoreload.py
+@@ -157,51 +157,76 @@ class TestIterModulesAndFiles(SimpleTestCase):
+ 
+ 
+ class TestChildArguments(SimpleTestCase):
+-    @mock.patch('sys.argv', [django.__main__.__file__, 'runserver'])
++    @mock.patch('sys.argv', ['django', 'runserver'])
+     @mock.patch('sys.warnoptions', [])
+     def test_run_as_module(self):
+-        self.assertEqual(
+-            autoreload.get_child_arguments(),
+-            [sys.executable, '-m', 'django', 'runserver']
+-        )
++        module = types.ModuleType('__main__')
++        module.__spec__ = types.SimpleNamespace(parent='django')
++        with mock.patch.dict(sys.modules, {'__main__': module}):
++            self.assertEqual(
++                autoreload.get_child_arguments(),
++                [sys.executable, '-m', 'django', 'runserver']
++            )
++
++    @mock.patch('sys.argv', ['mypkg', 'runserver'])
++    @mock.patch('sys.warnoptions', [])
++    def test_run_as_module_with_other_package(self):
++        module = types.ModuleType('__main__')
++        module.__spec__ = types.SimpleNamespace(parent='mypkg')
++        with mock.patch.dict(sys.modules, {'__main__': module}):
++            self.assertEqual(
++                autoreload.get_child_arguments(),
++                [sys.executable, '-m', 'mypkg', 'runserver']
++            )
+ 
+     @mock.patch('sys.argv', [__file__, 'runserver'])
+     @mock.patch('sys.warnoptions', ['error'])
+     def test_warnoptions(self):
+-        self.assertEqual(
+-            autoreload.get_child_arguments(),
+-            [sys.executable, '-Werror', __file__, 'runserver']
+-        )
++        module = types.ModuleType('__main__')
++        module.__spec__ = None
++        with mock.patch.dict(sys.modules, {'__main__': module}):
++            self.assertEqual(
++                autoreload.get_child_arguments(),
++                [sys.executable, '-Werror', __file__, 'runserver']
++            )
+ 
+     @mock.patch('sys.warnoptions', [])
+     def test_exe_fallback(self):
+         with tempfile.TemporaryDirectory() as tmpdir:
+             exe_path = Path(tmpdir) / 'django-admin.exe'
+             exe_path.touch()
+-            with mock.patch('sys.argv', [str(exe_path.with_suffix('')), 'runserver']):
+-                self.assertEqual(
+-                    autoreload.get_child_arguments(),
+-                    [str(exe_path), 'runserver']
+-                )
++            module = types.ModuleType('__main__')
++            module.__spec__ = None
++            with mock.patch.dict(sys.modules, {'__main__': module}):
++                with mock.patch('sys.argv', [str(exe_path.with_suffix('')), 'runserver']):
++                    self.assertEqual(
++                        autoreload.get_child_arguments(),
++                        [str(exe_path), 'runserver']
++                    )
+ 
+     @mock.patch('sys.warnoptions', [])
+     def test_entrypoint_fallback(self):
+         with tempfile.TemporaryDirectory() as tmpdir:
+             script_path = Path(tmpdir) / 'django-admin-script.py'
+             script_path.touch()
+-            with mock.patch('sys.argv', [str(script_path.with_name('django-admin')), 'runserver']):
+-                self.assertEqual(
+-                    autoreload.get_child_arguments(),
+-                    [sys.executable, str(script_path), 'runserver']
+-                )
++            module = types.ModuleType('__main__')
++            module.__spec__ = None
++            with mock.patch.dict(sys.modules, {'__main__': module}):
++                with mock.patch('sys.argv', [str(script_path.with_name('django-admin')), 'runserver']):
++                    self.assertEqual(
++                        autoreload.get_child_arguments(),
++                        [sys.executable, str(script_path), 'runserver']
++                    )
+ 
+     @mock.patch('sys.argv', ['does-not-exist', 'runserver'])
+     @mock.patch('sys.warnoptions', [])
+     def test_raises_runtimeerror(self):
++        module = types.ModuleType('__main__')
++        module.__spec__ = None
+         msg = 'Script does-not-exist does not exist.'
+-        with self.assertRaisesMessage(RuntimeError, msg):
+-            autoreload.get_child_arguments()
+-
++        with mock.patch.dict(sys.modules, {'__main__': module}):
++            with self.assertRaisesMessage(RuntimeError, msg):
++                autoreload.get_child_arguments()
+ 
+ class TestUtilities(SimpleTestCase):
+     def test_is_django_module(self):
+@@ -430,12 +455,15 @@ class RestartWithReloaderTests(SimpleTestCase):
+         return mock_call
+ 
+     def test_manage_py(self):
++        module = types.ModuleType('__main__')
++        module.__spec__ = None
+         with tempfile.TemporaryDirectory() as temp_dir:
+             script = Path(temp_dir) / 'manage.py'
+             script.touch()
+             argv = [str(script), 'runserver']
+             mock_call = self.patch_autoreload(argv)
+-            autoreload.restart_with_reloader()
++            with mock.patch.dict(sys.modules, {'__main__': module}):
++                autoreload.restart_with_reloader()
+             self.assertEqual(mock_call.call_count, 1)
+             self.assertEqual(
+                 mock_call.call_args[0][0],
+@@ -443,10 +471,11 @@ class RestartWithReloaderTests(SimpleTestCase):
+             )
+ 
+     def test_python_m_django(self):
+-        main = '/usr/lib/pythonX.Y/site-packages/django/__main__.py'
+-        argv = [main, 'runserver']
++        module = types.ModuleType('__main__')
++        module.__spec__ = types.SimpleNamespace(parent='django')
++        argv = ['/usr/lib/pythonX.Y/site-packages/django/__main__.py', 'runserver']
+         mock_call = self.patch_autoreload(argv)
+-        with mock.patch('django.__main__.__file__', main):
++        with mock.patch.dict(sys.modules, {'__main__': module}):
+             autoreload.restart_with_reloader()
+             self.assertEqual(mock_call.call_count, 1)
+             self.assertEqual(mock_call.call_args[0][0], [self.executable, '-Wall', '-m', 'django'] + argv[1:])

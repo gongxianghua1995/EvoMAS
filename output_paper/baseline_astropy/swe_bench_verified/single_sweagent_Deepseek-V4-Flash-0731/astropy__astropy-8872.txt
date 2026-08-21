@@ -1,0 +1,40 @@
+diff --git a/astropy/units/quantity.py b/astropy/units/quantity.py
+index ded609cbe9..677f85557d 100644
+--- a/astropy/units/quantity.py
++++ b/astropy/units/quantity.py
+@@ -296,7 +296,7 @@ class Quantity(np.ndarray, metaclass=InheritDocstrings):
+                 if not copy:
+                     return value
+ 
+-                if not (np.can_cast(np.float32, value.dtype) or
++                if not (np.issubdtype(value.dtype, np.inexact) or
+                         value.dtype.fields):
+                     dtype = float
+ 
+@@ -377,7 +377,7 @@ class Quantity(np.ndarray, metaclass=InheritDocstrings):
+                             "Numpy numeric type.")
+ 
+         # by default, cast any integer, boolean, etc., to float
+-        if dtype is None and (not (np.can_cast(np.float32, value.dtype)
++        if dtype is None and (not (np.issubdtype(value.dtype, np.inexact)
+                                    or value.dtype.fields)
+                               or value.dtype.kind == 'O'):
+             value = value.astype(float)
+diff --git a/astropy/units/tests/test_quantity.py b/astropy/units/tests/test_quantity.py
+index be18e65c5b..f655e41123 100644
+--- a/astropy/units/tests/test_quantity.py
++++ b/astropy/units/tests/test_quantity.py
+@@ -142,6 +142,13 @@ class TestQuantityCreation:
+         a3 = np.array([1., 2.], dtype=np.float32)
+         q3 = u.Quantity(a3, u.yr)
+         assert q3.dtype == a3.dtype
++
++        # and all other inexact floating-point types (see #6390)
++        for dt in (np.float16, np.float32, np.float64, np.longdouble):
++            a = np.array([1., 2.], dtype=dt)
++            q = u.Quantity(a, u.yr)
++            assert q.dtype == a.dtype
++
+         # items stored as objects by numpy should be converted to float
+         # by default
+         q4 = u.Quantity(decimal.Decimal('10.25'), u.m)

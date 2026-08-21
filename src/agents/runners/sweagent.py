@@ -30,6 +30,31 @@ from .base import BaseAgentRunner
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_model_id(model_id: str) -> str:
+    """Fallback a ``bedrock:`` model_id to ``EVO_MAS_FALLBACK_MODEL`` when boto3
+    is unavailable, so MAS configs whose agents still carry Bedrock model_ids
+    (e.g. meta-model left them unchanged, or GENERATE fell back to the original
+    pool config) can still execute on non-AWS / OpenAI-compatible environments.
+
+    In AWS environments with boto3 installed this is a no-op.
+    """
+    if not (model_id or "").startswith("bedrock:"):
+        return model_id
+    try:
+        import boto3  # noqa: F401
+        return model_id
+    except ImportError:
+        fb = os.environ.get("EVO_MAS_FALLBACK_MODEL")
+        if fb:
+            logger.warning(
+                "boto3 unavailable: falling back agent model '%s' -> '%s'",
+                model_id, fb,
+            )
+            return fb
+        return model_id
+
+
 # Try to import SWE-agent
 try:
     from sweagent.agent.agents import DefaultAgent, TemplateConfig
@@ -177,6 +202,14 @@ class SWEAgentRunner(BaseAgentRunner):
         match = re.search(r'Repository:\s*(/[^\s\n]+)', task)
         if match:
             return Path(match.group(1))
+
+        # Try "Repository: owner/repo" -> dataset/repos/<repo>
+        match = re.search(r'Repository:\s*([^\s/]+/([^\s/]+))', task)
+        if match:
+            repo_name = match.group(2)
+            candidate = Path("dataset/repos") / repo_name
+            if candidate.exists():
+                return candidate
 
         # Try to find "directory /path/to/repo" pattern (common in SWE-bench tasks)
         match = re.search(r'directory\s+(/[^\s\n\.]+)', task)
@@ -376,8 +409,9 @@ class SWEAgentRunner(BaseAgentRunner):
         except ImportError:
             logger.warning("dotenv not available, relying on existing environment")
 
-        # Convert model ID to litellm format
-        litellm_model_id = self._convert_model_id(spec.model_id)
+        # Convert model ID to litellm format (fall back to EVO_MAS_FALLBACK_MODEL
+        # when a bedrock model_id cannot be used because boto3 is missing)
+        litellm_model_id = self._convert_model_id(_resolve_model_id(spec.model_id))
         logger.info(f"Using litellm model: {litellm_model_id}")
 
         # Load tools configuration from SWE-agent default config

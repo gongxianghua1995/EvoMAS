@@ -1,0 +1,51 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+index 4648daf395..c2ac2557f8 100644
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -1077,10 +1077,15 @@ class Query(BaseExpression):
+         elif isinstance(value, (list, tuple)):
+             # The items of the iterable may be expressions and therefore need
+             # to be resolved independently.
+-            return type(value)(
++            values = (
+                 self.resolve_lookup_value(sub_value, can_reuse, allow_joins)
+                 for sub_value in value
+             )
++            if hasattr(value, '_fields'):
++                # Named tuples should use positional arguments to avoid
++                # TypeError on construction.
++                return type(value)(*values)
++            return type(value)(values)
+         return value
+ 
+     def solve_lookup_type(self, lookup):
+diff --git a/tests/expressions/tests.py b/tests/expressions/tests.py
+index ceeed3aeb1..5bad32b308 100644
+--- a/tests/expressions/tests.py
++++ b/tests/expressions/tests.py
+@@ -2,6 +2,7 @@ import datetime
+ import pickle
+ import unittest
+ import uuid
++from collections import namedtuple
+ from copy import deepcopy
+ from decimal import Decimal
+ from unittest import mock
+@@ -884,6 +885,17 @@ class IterableLookupInnerExpressionsTests(TestCase):
+             ordered=False
+         )
+ 
++    def test_range_lookup_allows_namedtuple(self):
++        Range = namedtuple('Range', 'near far')
++        self.assertQuerysetEqual(
++            Company.objects.filter(num_employees__range=Range(1, 100)),
++            [
++                '<Company: 5020 Ltd>', '<Company: 5040 Ltd>', '<Company: 5050 Ltd>',
++                '<Company: 5060 Ltd>', '<Company: 99300 Ltd>',
++            ],
++            ordered=False
++        )
++
+     @unittest.skipUnless(connection.vendor == 'sqlite',
+                          "This defensive test only works on databases that don't validate parameter types")
+     def test_complex_expressions_do_not_introduce_sql_injection_via_untrusted_string_inclusion(self):
