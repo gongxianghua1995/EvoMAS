@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Run ChatDev baseline experiments on 4 domains (146 selected cases total)
+# Usage: bash scripts/run_chatdev_baseline.sh
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
+# Setup
+git pull
+source ~/miniconda/etc/profile.d/conda.sh
+
+# Config
+BASELINE="chatdev"
+DATASET="swe_bench_verified"
+MODEL="openai:Deepseek-V4-Flash-0731"
+JUDGE="none"
+EVAL_ON_SAVE="--evaluate-on-save"
+
+# Output log
+LOG_DIR="./tmp"
+LOG_FILE="$LOG_DIR/baseline.log"
+mkdir -p "$LOG_DIR"
+
+echo "======================================================================"
+echo "# ChatDev Baseline Experiment"
+echo "# Dataset: $DATASET"
+echo "# Model: $MODEL"
+echo "# Judge: $JUDGE"
+echo "# Log: $LOG_FILE"
+echo "======================================================================"
+
+run_domain() {
+    local domain=$1
+    local task_ids=$2
+    local output_dir="output/chatdev_${domain}"
+
+    mkdir -p "$output_dir"
+
+    local count=$(echo "$task_ids" | tr ',' '\n' | wc -l)
+
+    echo ""
+    echo "----------------------------------------------------------------------"
+    echo "# Starting: $domain ($count cases)"
+    echo "# Output: $output_dir"
+    echo "----------------------------------------------------------------------"
+
+    conda run -n evomas --no-capture-output python -u main.py \
+        --dataset "$DATASET" \
+        --baseline "$BASELINE" \
+        --task-ids "$task_ids" \
+        --llm-as-judge "$JUDGE" \
+        $EVAL_ON_SAVE \
+        --output-dir "$output_dir" \
+        2>&1 | tee -a "$LOG_FILE"
+
+    echo "# Completed: $domain at $(date)" | tee -a "$LOG_FILE"
+}
+
+# Clear log and run sequentially in background
+> "$LOG_FILE"
+
+run_domain "django" "$(paste -sd',' scripts/selected_django.txt)" &
+run_domain "sympy" "$(paste -sd',' scripts/selected_sympy.txt)" &
+run_domain "matplotlib" "$(paste -sd',' scripts/selected_matplotlib.txt)" &
+run_domain "scikit-learn" "$(paste -sd',' scripts/selected_scikit-learn.txt)" &
+
+wait
+
+echo ""
+echo "======================================================================"
+echo "# All domains completed at $(date)"
+echo "======================================================================" | tee -a "$LOG_FILE"
