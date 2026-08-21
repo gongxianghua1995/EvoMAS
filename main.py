@@ -14,6 +14,7 @@ Usage:
 """
 
 import sys
+import json
 import random
 import argparse
 import logging
@@ -164,20 +165,23 @@ def _setup_baseline_logging(output_dir: str) -> None:
     log_file = out_path / "run.log"
 
     # Attach a FileHandler to the root logger (preserves the default stderr handler)
-    root_logger = logging.getLogger()
-    # Avoid stacking duplicate file handlers on repeated calls
-    for h in root_logger.handlers:
-        if isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", "") == str(log_file):
-            break
-    else:
-        fh = logging.FileHandler(log_file, mode="a", encoding="utf-8")
-        fh.setLevel(logging.INFO)
-        fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-        root_logger.addHandler(fh)
+    # Skip if stdout is piped — shell redirection handles file output; avoid duplicate.
+    is_piped = not sys.stdout.isatty()
+    if not is_piped:
+        root_logger = logging.getLogger()
+        # Avoid stacking duplicate file handlers on repeated calls
+        for h in root_logger.handlers:
+            if isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", "") == str(log_file):
+                break
+        else:
+            fh = logging.FileHandler(log_file, mode="a", encoding="utf-8")
+            fh.setLevel(logging.INFO)
+            fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+            root_logger.addHandler(fh)
 
-    # Redirect stdout/stderr to the log file as well (tee to keep console)
-    _TeeStream.tee(log_file, stream_name="stdout")
-    _TeeStream.tee(log_file, stream_name="stderr")
+        # Redirect stdout/stderr to the log file as well (tee to keep console).
+        _TeeStream.tee(log_file, stream_name="stdout")
+        _TeeStream.tee(log_file, stream_name="stderr")
 
 
 class _TeeStream:
@@ -226,8 +230,10 @@ def _run_baseline(
     seed: int,
     output_dir: str,
     llm_as_judge: Optional[str],
+    no_cache: bool = False,
     task_ids: Optional[List[Union[int, str]]] = None,
     repo_filter: Optional[str] = None,
+    evaluate_on_save: bool = False,
 ) -> Dict[str, Any]:
     """Evaluate one pool configuration directly, skipping all meta-model evolution.
 
@@ -287,11 +293,15 @@ def _run_baseline(
     # Auto-suffix output_dir by repo for isolation
     if repo_short:
         output_dir = f"{output_dir.rstrip('/')}/baseline_{repo_short}"
+    elif task_ids:
+        # Selected cases mode: output to output_selected/ for clarity
+        output_dir = f"{output_dir.rstrip('/')}/output_selected"
     else:
         # Even without repo filter, put under baseline_ subdir to avoid colliding with evolution runs
         output_dir = f"{output_dir.rstrip('/')}/baseline"
 
     # Create output directory early and redirect logs there so nothing lands in /tmp
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
     _setup_baseline_logging(output_dir)
 
     logger.info("=" * 80)
@@ -337,6 +347,9 @@ def _run_baseline(
             task_ids = [dataset[i].id for i in idxs] if dataset_name.startswith("swe") else idxs
         logger.info(f"Sampled {len(task_ids)} task ids (first 3: {task_ids[:3]})")
 
+    # Baseline mode uses local SWE-bench evaluation, not LLM-as-judge.
+    llm_as_judge = None
+
     result = interpret_mas(
         config_path=str(target),
         dataset_name=dataset_name,
@@ -346,25 +359,33 @@ def _run_baseline(
         output_dir=output_dir,
         verbose=True,
         llm_as_judge=llm_as_judge,
+        evaluate_on_save=evaluate_on_save,
     )
 
     stats = result.get("statistics", {})
-    accuracy = stats.get("accuracy", 0)
-    reward = compute_reward(stats, beta=BETA, cost_weight=COST_WEIGHT)
     output_location = result.get("output_location", f"{output_dir}/{dataset_name}/")
+
+    # Skip batch evaluation if evaluate_on_save=True (each task was already evaluated per-task)
+    if evaluate_on_save:
+        official_accuracy = None
+    else:
+        official_accuracy = _run_local_eval(dataset_name, output_location, task_ids, no_cache=no_cache)
+
+    accuracy = official_accuracy if official_accuracy is not None else stats.get("accuracy", 0)
+    reward = compute_reward(stats, beta=BETA, cost_weight=COST_WEIGHT)
 
     logger.info("\n" + "=" * 80)
     logger.info("BASELINE COMPLETE")
     logger.info("=" * 80)
-    logger.info(f"Accuracy (judge): {fmt_acc(accuracy)}")
-    logger.info(f"Reward:           {reward:.4f}")
-    logger.info(f"Results saved to: {output_location}")
+    logger.info(f"Accuracy (local eval): {fmt_acc(accuracy)}")
+    logger.info(f"Reward:                {reward:.4f}")
+    logger.info(f"Results saved to:      {output_location}")
     logger.info("=" * 80)
 
     return {
         "initial_accuracy": accuracy,
         "final_accuracy": accuracy,
-        "final_official_accuracy": stats.get("accuracy"),
+        "final_official_accuracy": official_accuracy if official_accuracy is not None else stats.get("accuracy"),
         "initial_reward": reward,
         "final_reward": reward,
         "improved": False,
@@ -372,6 +393,112 @@ def _run_baseline(
         "num_operations": 0,
         "added_to_pool": False,
     }
+
+
+def _run_local_eval(
+    dataset_name: str,
+    output_location: str,
+    task_ids: Optional[List[Union[int, str]]],
+    no_cache: bool = False,
+) -> Optional[float]:
+    """Run local SWE-bench evaluation on generated patches.
+
+    Reads <task_id>.txt patch files from output_location, evaluates each with
+    local_swe_evaluator.evaluate_patch, and writes evaluation_results.json +
+    updates results.json with resolved status. Returns accuracy (FULL/total).
+
+    Only activates for swe_bench_* datasets. Returns None for others.
+    """
+    if not dataset_name.startswith("swe_bench"):
+        return None
+
+    from src.dataset.local_swe_evaluator import evaluate_patch
+
+    out_dir = Path(output_location)
+    results_json = out_dir / "results.json"
+    eval_json = out_dir / "evaluation_results.json"
+
+    if not results_json.exists():
+        logger.warning(f"results.json not found at {results_json}, skipping local eval")
+        return None
+
+    with open(results_json) as f:
+        results = json.load(f)
+
+    results_by_id = {r["task_id"]: r for r in results} if isinstance(results, list) else {}
+    if not results_by_id:
+        logger.warning("No task results to evaluate")
+        return None
+
+    eval_results = []
+    resolved_count = 0
+    total = 0
+
+    for task_id in task_ids or results_by_id.keys():
+        task_id_str = str(task_id)
+        patch_file = out_dir / f"{task_id_str}.txt"
+        if not patch_file.exists():
+            logger.warning(f"Patch file missing: {patch_file}, marking as NO")
+            eval_results.append({
+                "instance_id": task_id_str,
+                "resolved": "NO",
+                "error": "patch_file_missing",
+            })
+            total += 1
+            continue
+
+        patch_content = patch_file.read_text()
+        if not patch_content.strip():
+            logger.warning(f"Empty patch for {task_id_str}, marking as NO")
+            eval_results.append({
+                "instance_id": task_id_str,
+                "resolved": "NO",
+                "error": "empty_patch",
+            })
+            total += 1
+            continue
+
+        logger.info(f"Evaluating {task_id_str}...")
+        try:
+            ev = evaluate_patch(task_id_str, patch_content, dataset=dataset_name, use_cache=not no_cache)
+            if "error" in ev:
+                logger.warning(f"  {task_id_str}: eval error - {ev['error']}")
+                ev["resolved"] = "NO"
+                eval_results.append(ev)
+            else:
+                eval_results.append(ev)
+                if ev.get("resolved") == "FULL":
+                    resolved_count += 1
+                    logger.info(f"  {task_id_str}: FULL")
+                elif ev.get("resolved") == "PARTIAL":
+                    logger.info(f"  {task_id_str}: PARTIAL")
+                else:
+                    logger.info(f"  {task_id_str}: NO")
+        except Exception as e:
+            logger.error(f"  {task_id_str}: exception - {e}")
+            eval_results.append({
+                "instance_id": task_id_str,
+                "resolved": "NO",
+                "error": str(e),
+            })
+
+        total += 1
+
+    with open(eval_json, "w") as f:
+        json.dump(eval_results, f, indent=2)
+    logger.info(f"Evaluation results saved to {eval_json}")
+
+    for ev in eval_results:
+        tid = ev.get("instance_id")
+        if tid in results_by_id:
+            results_by_id[tid]["resolved"] = ev.get("resolved", "NO")
+            results_by_id[tid]["eval_error"] = ev.get("error", "")
+    with open(results_json, "w") as f:
+        json.dump(results, f, indent=2)
+
+    accuracy = resolved_count / total if total > 0 else 0.0
+    logger.info(f"Local eval accuracy: {resolved_count}/{total} = {accuracy:.4f}")
+    return accuracy
 
 
 # ============================================================================
@@ -1265,6 +1392,13 @@ Examples:
     )
 
     parser.add_argument(
+        "--task-ids-file",
+        type=str,
+        default=None,
+        help="Path to file containing task IDs (one per line). Overrides --num-eval-tasks."
+    )
+
+    parser.add_argument(
         "--memory-path",
         type=str,
         default=None,
@@ -1291,6 +1425,22 @@ Examples:
         type=int,
         default=1,
         help="Number of batches run in parallel inside the pipeline. Default 1 = serial. Increase cautiously (watch API rate limits)."
+    )
+
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        default=False,
+        help="Disable evaluation result caching. Re-run evaluation even if cached results exist."
+    )
+
+    parser.add_argument(
+        "--evaluate-on-save",
+        action="store_true",
+        default=False,
+        help="Evaluate each task's patch immediately after it is saved (per-task official eval). "
+             "Skips the batch evaluation step at the end. Useful for long runs where you want "
+             "evaluation feedback as tasks complete."
     )
 
     parser.add_argument(
@@ -1331,6 +1481,17 @@ Examples:
         logger.error(f"Please create the pool directory or specify a valid --pool-dir")
         return 1
 
+    # Load task IDs from file if specified
+    task_ids = args.task_ids
+    if args.task_ids_file is not None:
+        task_ids_file = Path(args.task_ids_file)
+        if not task_ids_file.exists():
+            logger.error(f"Task IDs file not found: {args.task_ids_file}")
+            return 1
+        with open(task_ids_file) as f:
+            task_ids = [line.strip() for line in f if line.strip()]
+        logger.info(f"Loaded {len(task_ids)} task IDs from {args.task_ids_file}")
+
     try:
         if args.baseline is not None:
             results = _run_baseline(
@@ -1341,8 +1502,10 @@ Examples:
                 seed=args.seed,
                 output_dir=args.output_dir,
                 llm_as_judge=args.llm_as_judge if args.llm_as_judge and args.llm_as_judge.lower() != 'none' else None,
-                task_ids=args.task_ids,
+                no_cache=args.no_cache,
+                task_ids=task_ids,
                 repo_filter=args.repo,
+                evaluate_on_save=args.evaluate_on_save,
             )
         else:
             # Run evolution pipeline

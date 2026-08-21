@@ -93,7 +93,8 @@ class ExperimentRunner:
         use_cache: bool = True,
         skip_evaluation: bool = True,
         llm_as_judge: Optional[str] = None,
-        task_timeout: float = 600.0
+        task_timeout: float = 600.0,
+        evaluate_on_save: bool = False,
     ):
         """
         Initialize experiment runner.
@@ -106,6 +107,7 @@ class ExperimentRunner:
             skip_evaluation: Skip evaluation step (useful for patch generation) (default: True)
             llm_as_judge: Model ID for LLM-as-judge evaluation (None = use dataset evaluator)
             task_timeout: Maximum time per task in seconds (default: 600)
+            evaluate_on_save: Evaluate patch immediately after saving (default: False)
         """
         self.verbose = verbose
         self.save_individual_outputs = save_individual_outputs
@@ -114,6 +116,7 @@ class ExperimentRunner:
         self.use_cache = use_cache
         self.skip_evaluation = skip_evaluation
         self.task_timeout = task_timeout
+        self.evaluate_on_save = evaluate_on_save
 
     def run_single_experiment(
         self,
@@ -169,7 +172,8 @@ class ExperimentRunner:
                 skip_evaluation=self.skip_evaluation,  # Use configured evaluation setting
                 use_cache=self.use_cache,
                 llm_as_judge=self.llm_as_judge,
-                task_timeout=self.task_timeout
+                task_timeout=self.task_timeout,
+                evaluate_on_save=self.evaluate_on_save,
             )
         except Exception as e:
             logger.error(f"Failed to initialize MasRunner: {e}")
@@ -365,7 +369,8 @@ def interpret_mas(
     use_cache: bool = True,
     skip_evaluation: bool = True,
     llm_as_judge: Optional[str] = None,
-    task_timeout: float = 600.0
+    task_timeout: float = 600.0,
+    evaluate_on_save: bool = False,
 ) -> Dict[str, Any]:
     """
     Interpret and execute a MAS configuration programmatically.
@@ -386,6 +391,7 @@ def interpret_mas(
         skip_evaluation: Skip evaluation step, useful for patch generation (default: True)
         llm_as_judge: Model ID for LLM-as-judge evaluation (None = use dataset evaluator)
         task_timeout: Maximum time per task in seconds (default: 600, auto-increased for SWE-bench)
+        evaluate_on_save: Evaluate patch immediately after saving (per-task official eval, default: False)
 
     Returns:
         Dictionary with execution results:
@@ -421,7 +427,8 @@ def interpret_mas(
         use_cache=use_cache,
         skip_evaluation=skip_evaluation,
         llm_as_judge=llm_as_judge,
-        task_timeout=task_timeout
+        task_timeout=task_timeout,
+        evaluate_on_save=evaluate_on_save,
     )
 
     # Run the experiment

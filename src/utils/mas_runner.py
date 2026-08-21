@@ -258,6 +258,7 @@ WORKER_VERBOSE = None
 WORKER_SAVE_OUTPUTS = None
 WORKER_OUTPUT_DIR = None
 WORKER_USE_CACHE = None
+WORKER_EVALUATE_ON_SAVE = None
 
 
 @dataclass
@@ -272,10 +273,12 @@ class MasRunResult:
 
 
 def init_mas_worker(config_path: str, dataset_name: str, dataset_split: str,
-                    verbose: bool, save_outputs: bool, output_dir: str, use_cache: bool):
+                    verbose: bool, save_outputs: bool, output_dir: str, use_cache: bool,
+                    evaluate_on_save: bool):
     """Initialize worker process with MasRunner instance."""
     global WORKER_RUNNER, WORKER_CONFIG_PATH, WORKER_DATASET_NAME, WORKER_DATASET_SPLIT
     global WORKER_VERBOSE, WORKER_SAVE_OUTPUTS, WORKER_OUTPUT_DIR, WORKER_USE_CACHE
+    global WORKER_EVALUATE_ON_SAVE
 
     WORKER_CONFIG_PATH = config_path
     WORKER_DATASET_NAME = dataset_name
@@ -284,6 +287,7 @@ def init_mas_worker(config_path: str, dataset_name: str, dataset_split: str,
     WORKER_SAVE_OUTPUTS = save_outputs
     WORKER_OUTPUT_DIR = output_dir
     WORKER_USE_CACHE = use_cache
+    WORKER_EVALUATE_ON_SAVE = evaluate_on_save
 
     # Create MasRunner once per worker
     WORKER_RUNNER = MasRunner(
@@ -294,7 +298,8 @@ def init_mas_worker(config_path: str, dataset_name: str, dataset_split: str,
         save_individual_outputs=save_outputs,
         output_dir=output_dir,
         skip_evaluation=False,
-        use_cache=use_cache
+        use_cache=use_cache,
+        evaluate_on_save=evaluate_on_save,
     )
 
     worker_logger = logging.getLogger(f"mas_worker_init")
@@ -368,7 +373,8 @@ class MasRunner:
         skip_evaluation: bool = True,  # Default to skip eval during run
         use_cache: bool = True,  # Enable caching by default
         llm_as_judge: Optional[str] = None,  # LLM-as-judge model ID
-        task_timeout: float = 600.0  # Task timeout in seconds (default: 10 minutes)
+        task_timeout: float = 600.0,  # Task timeout in seconds (default: 10 minutes)
+        evaluate_on_save: bool = False,  # Evaluate patch immediately after saving (per-task eval)
     ):
         """
         Initialize MAS runner.
@@ -384,6 +390,7 @@ class MasRunner:
             skip_evaluation: Skip evaluation during run (use batch evaluator later) (default: True)
             use_cache: Skip tasks that already have output files (default: True)
             task_timeout: Maximum time for a single task in seconds (default: 300 = 5 min)
+            evaluate_on_save: Evaluate patch immediately after saving (default: False)
         """
         self.config_path = Path(config_path)
         self.dataset_name = dataset_name
@@ -400,6 +407,7 @@ class MasRunner:
             self.task_timeout = 1800.0  # 30 minutes for SWE-bench tasks
         else:
             self.task_timeout = task_timeout
+        self.evaluate_on_save = evaluate_on_save
 
         # Configure logging
         if not verbose:
@@ -887,6 +895,14 @@ class MasRunner:
             "raw_output": result.result[:500] if result.result else None  # Store first 500 chars of raw output
         }
 
+        # Record token usage and execution time from the run metadata
+        if result.metadata:
+            meta_data["input_tokens"] = result.metadata.get("input_tokens", 0)
+            meta_data["output_tokens"] = result.metadata.get("output_tokens", 0)
+            meta_data["total_tokens"] = result.metadata.get("total_tokens", 0)
+            if "duration_seconds" in result.metadata:
+                meta_data["duration_seconds"] = result.metadata["duration_seconds"]
+
         # Only include evaluation if it was done
         if not self.skip_evaluation and result.correct is not None:
             meta_data["correct"] = result.correct
@@ -895,6 +911,78 @@ class MasRunner:
 
         if self.verbose:
             logger.info(f"Saved output to: {output_file}")
+
+    def _evaluate_patch_on_save(self, task_id: str, result: MasRunResult) -> Optional[Dict[str, Any]]:
+        """
+        Evaluate a saved patch immediately after it was saved.
+
+        Used when evaluate_on_save=True to provide per-task evaluation
+        instead of batch evaluation after all tasks complete.
+
+        Args:
+            task_id: Task ID
+            result: MasRunResult containing the patch
+
+        Returns:
+            Evaluation dict with 'resolved' key, or None if not applicable
+        """
+        # Only applies to SWE-bench datasets
+        if not ('swe' in self.dataset_name.lower() or self.dataset_name in ['swebench', 'swebench_lite', 'swebench_verified']):
+            return None
+
+        # Get the saved patch file path
+        config_name = self._get_config_name_with_model()
+        patch_file = self.output_dir / self.dataset_name / config_name / f"{task_id}.txt"
+
+        if not patch_file.exists():
+            logger.warning(f"Patch file not found for evaluation: {patch_file}")
+            return None
+
+        try:
+            # Read the saved patch
+            with open(patch_file, 'r', encoding='utf-8') as f:
+                patch_content = f.read().strip()
+
+            if not patch_content or patch_content.startswith("ERROR:"):
+                logger.info(f"Skipping evaluation for empty/error patch: {task_id}")
+                return None
+
+            # Evaluate the patch
+            from src.dataset.local_swe_evaluator import evaluate_patch
+            eval_result = evaluate_patch(
+                task_id,
+                patch_content,
+                dataset=self.dataset_name,
+                use_cache=True  # Keep env for future tasks
+            )
+
+            # Log the result
+            resolved = eval_result.get("resolved", "NO")
+            if resolved == "FULL":
+                logger.info(f"  {task_id}: FULL")
+            elif resolved == "PARTIAL":
+                logger.info(f"  {task_id}: PARTIAL")
+            else:
+                logger.info(f"  {task_id}: NO")
+
+            # Update the metadata entry in _all_metadata with evaluation results
+            for meta in self._all_metadata:
+                if meta.get("task_id") == task_id:
+                    meta["resolved"] = resolved
+                    meta["eval_fail_to_pass"] = eval_result.get("fail_to_pass", {})
+                    meta["eval_pass_to_pass"] = eval_result.get("pass_to_pass", {})
+                    if "error" in eval_result:
+                        meta["eval_error"] = eval_result["error"]
+                    break
+
+            # Re-save consolidated results with evaluation
+            self._save_consolidated_results()
+
+            return eval_result
+
+        except Exception as e:
+            logger.warning(f"Failed to evaluate patch for {task_id}: {e}")
+            return None
 
     def _save_consolidated_results(self):
         """
@@ -1201,14 +1289,21 @@ Do NOT include any explanations, markdown formatting, or other text. ONLY output
                     logger.warning(f"Repository path not found for SWE-bench instance {task.id}")
 
             # Run MAS with timeout - returns tuple of (result, metadata)
+            task_start_time = time.time()
             if self.task_timeout and self.task_timeout > 0:
                 logger.info(f"Running task with {self.task_timeout:.0f}s timeout...")
                 result, metadata = self._run_with_timeout(task_query, self.task_timeout)
             else:
                 result, metadata = self._runtime.run(task_query)
+            duration_seconds = time.time() - task_start_time
 
             if self.verbose:
                 logger.info(f"\nResult: {result[:200]}...")
+
+            # Record execution time into metadata so it reaches results.json
+            if metadata is None:
+                metadata = {}
+            metadata['duration_seconds'] = duration_seconds
 
             # Evaluate only if not skipping evaluation
             is_correct = None
@@ -1228,6 +1323,17 @@ Do NOT include any explanations, markdown formatting, or other text. ONLY output
 
             # Save individual output if enabled
             self._save_task_output(task, mas_result)
+
+            # Evaluate patch immediately if evaluate_on_save is enabled (per-task eval)
+            if self.evaluate_on_save:
+                eval_result = self._evaluate_patch_on_save(task.id, mas_result)
+                if eval_result:
+                    resolved = eval_result.get("resolved", "NO")
+                    mas_result.correct = (resolved == "FULL")
+                    mas_result.metadata = mas_result.metadata or {}
+                    mas_result.metadata["resolved"] = resolved
+                    mas_result.metadata["eval_fail_to_pass"] = eval_result.get("fail_to_pass", {})
+                    mas_result.metadata["eval_pass_to_pass"] = eval_result.get("pass_to_pass", {})
 
             # Save consolidated results.json
             self._save_consolidated_results()
@@ -1455,6 +1561,11 @@ Do NOT include any explanations, markdown formatting, or other text. ONLY output
                 execution_time = time.time() - start_time
                 total_time += execution_time
 
+                # Record per-task duration into metadata so it reaches results.json
+                if metadata is None:
+                    metadata = {}
+                metadata['duration_seconds'] = execution_time
+
                 # Track token usage
                 if metadata:
                     total_input_tokens += metadata.get('input_tokens', 0)
@@ -1666,7 +1777,8 @@ Do NOT include any explanations, markdown formatting, or other text. ONLY output
                     False,  # verbose=False in workers
                     self.save_individual_outputs,
                     self.output_dir,
-                    self.use_cache
+                    self.use_cache,
+                    self.evaluate_on_save,
                 )
             ) as pool:
                 # Process tasks in parallel (ordered to minimize repo conflicts)

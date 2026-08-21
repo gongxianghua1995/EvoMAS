@@ -78,6 +78,11 @@ def _wrap_query_with_step_logger(model: Any, agent_id: str, work_dir: Optional[P
 
     original_query = model.query
     step_counter = [0]
+    # Token accumulators attached to the model so the runner can read them
+    # after agent.run() completes.
+    if not hasattr(model, 'total_input_tokens'):
+        model.total_input_tokens = 0
+        model.total_output_tokens = 0
     FRAMEWORK_NUDGE = "No tool calls found in the response. Every response MUST include at least one tool call."
     cd_prefix = f"cd {work_dir} && " if work_dir else ""
     SUBMIT_CMD = f"{cd_prefix}echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT ; git add -A 2>/dev/null ; git diff --cached 2>/dev/null ; true"
@@ -177,6 +182,23 @@ def _wrap_query_with_step_logger(model: Any, agent_id: str, work_dir: Optional[P
         # Strip empty tool_calls (DashScope rejects them in history)
         if isinstance(response, dict) and not response.get("tool_calls"):
             response.pop("tool_calls", None)
+
+        # Accumulate token usage from the response. litellm responses expose
+        # usage as either a dict ("usage") or via the model's own counters.
+        usage = None
+        if isinstance(response, dict):
+            usage = response.get("usage") or response.get("token_usage")
+        else:
+            usage = getattr(response, "usage", None) or getattr(response, "token_usage", None)
+        if isinstance(usage, dict):
+            model.total_input_tokens += int(usage.get("prompt_tokens", usage.get("input_tokens", 0)))
+            model.total_output_tokens += int(usage.get("completion_tokens", usage.get("output_tokens", 0)))
+        elif usage is not None:
+            # litellm Usage object with attributes
+            pt = getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", 0)
+            ct = getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", 0)
+            model.total_input_tokens += int(pt)
+            model.total_output_tokens += int(ct)
 
         out_text = _fmt_response(response)
         if len(out_text) > 2000:
@@ -321,6 +343,8 @@ class EvoMASModelAdapter:
         self.config = config or {}
         self.cost = 0.0
         self.n_calls = 0
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
 
         # Get the underlying smolagents model if available
         if hasattr(model_wrapper, 'smolagents_model'):
@@ -350,6 +374,8 @@ class EvoMASModelAdapter:
 
                 if hasattr(response, 'token_usage') and response.token_usage is not None:
                     token_usage = response.token_usage
+                    self.total_input_tokens += token_usage.input_tokens
+                    self.total_output_tokens += token_usage.output_tokens
                     total_tokens = token_usage.input_tokens + token_usage.output_tokens
                     self.cost += total_tokens * 0.00001
 
@@ -661,6 +687,9 @@ class MinisweagentRunner(BaseAgentRunner):
             # agent.cost / agent.n_calls (mini-swe-agent v2.4+ aggregates at agent level)
             model_cost = getattr(agent, 'cost', getattr(agent.model, 'cost', 0.0))
             model_calls = getattr(agent, 'n_calls', getattr(agent.model, 'n_calls', 0))
+            input_tokens = getattr(agent.model, 'total_input_tokens', 0)
+            output_tokens = getattr(agent.model, 'total_output_tokens', 0)
+            total_tokens = input_tokens + output_tokens
 
             result = AgentResult(
                 agent_id=spec.id,
@@ -671,6 +700,9 @@ class MinisweagentRunner(BaseAgentRunner):
                     'model_cost': model_cost,
                     'model_calls': model_calls,
                     'total_messages': len(agent.messages),
+                    'input_tokens': input_tokens,
+                    'output_tokens': output_tokens,
+                    'total_tokens': total_tokens,
                     'had_patch_file': bool(patch_content),
                     'used_repo_dir': use_repo_dir,
                     'config': self.config_name,
@@ -680,7 +712,7 @@ class MinisweagentRunner(BaseAgentRunner):
             )
 
             logger.info(f"Agent {spec.id} completed: {exit_status}")
-            logger.info(f"  Model calls: {model_calls}, Cost: ${model_cost:.4f}")
+            logger.info(f"  Model calls: {model_calls}, Cost: ${model_cost:.4f}, Tokens: {total_tokens}")
             return result
 
         except Exception as e:

@@ -165,20 +165,86 @@ def apply_patch(patch_content: str, repo_path: str):
             subprocess.run(["git", "clean", "-fd"], capture_output=True)
 
 
+def resolve_test_names(test_list: list, test_patch: str) -> list:
+    """Resolve bare test names to full pytest paths using test_patch file.
+
+    For non-Django repos, the test_patch contains the file being modified.
+    We extract that file and prepend it to each test name to form:
+      'file_path::test_name'
+
+    Args:
+        test_list: List of bare test names (e.g., ['test_issue_11617'])
+        test_patch: Git-style diff that modifies the test file
+
+    Returns:
+        List of full test paths for pytest (e.g., ['sympy/geometry/tests/test_point.py::test_issue_11617'])
+    """
+    if not test_list or not test_patch:
+        return test_list
+
+    # Extract file path from test_patch (format: diff --git a/file b/file)
+    file_path = None
+    for line in test_patch.split('\n'):
+        if line.startswith('diff --git a/'):
+            # Extract 'b/' path which is the new file path
+            rest = line[len('diff --git a/'):]
+            if ' b/' in rest:
+                file_path = rest.split(' b/')[1]
+                break
+            elif rest.startswith('a/') and ' b/' not in rest:
+                # Some formats: diff --git a/path/to/file b/path/to/file
+                parts = rest.split()
+                if len(parts) >= 2:
+                    file_path = parts[1][2:]  # Remove 'b/' prefix
+                    break
+
+    if not file_path:
+        return test_list
+
+    # Prepend file path to each test name
+    resolved = []
+    for test in test_list:
+        # Skip if already has path separator
+        if '::' in test or '/' in test:
+            resolved.append(test)
+        else:
+            resolved.append(f"{file_path}::{test}")
+
+    return resolved
+
+
 def parse_log_pytest(log: str) -> Dict[str, str]:
     """
     Parser for test logs generated with PyTest framework.
-    From auto-code-rover/SWE-bench.
+    Handles two formats:
+    1. 'test_name STATUS'  (pytest -v output: sympy/.../test_point.py::test_issue_11617 PASSED)
+    2. 'STATUS test_name'  (legacy format from some harnesses)
     """
     test_status_map = {}
+
     for line in log.split("\n"):
-        if any([line.startswith(x.value) for x in TestStatus]):
-            if line.startswith(TestStatus.FAILED.value):
-                line = line.replace(" - ", " ")
-            test_case = line.split()
-            if len(test_case) <= 1:
-                continue
-            test_status_map[test_case[1]] = test_case[0]
+        line = line.strip()
+
+        # Format 1: pytest -v style 'test_name STATUS'
+        # e.g., 'sympy/geometry/tests/test_point.py::test_issue_11617 PASSED'
+        for status in ["PASSED", "FAILED", "SKIPPED", "ERROR"]:
+            if line.endswith(" " + status):
+                # Extract test name (everything before ' STATUS')
+                test_name_full = line[:-(len(status) + 1)]
+                # Extract just the function name part (after last ::)
+                if "::" in test_name_full:
+                    test_name = test_name_full.split("::")[-1]
+                else:
+                    test_name = test_name_full.split("/")[-1]
+                test_status_map[test_name] = status
+                break
+        else:
+            # Format 2: legacy 'STATUS test_name' (e.g., 'PASSED sympy.geo...test_point.py::test_func')
+            if any(line.startswith(x.value) for x in TestStatus):
+                parts = line.split()
+                if len(parts) >= 2:
+                    test_status_map[parts[1]] = parts[0]
+
     return test_status_map
 
 
@@ -329,10 +395,19 @@ def run_tests(env_name: str, repo_path: str, test_cmd: str = "pytest",
             full_cmd = test_cmd
     elif '-' not in test_cmd:
         # Not Django, no flags in test_cmd
-        full_cmd = f"{test_cmd} -xvs"
+        if test_list:
+            # Append test names to run specific tests
+            test_args = ' '.join(test_list)
+            full_cmd = f"{test_cmd} -xvs {test_args}"
+        else:
+            full_cmd = f"{test_cmd} -xvs"
     else:
         # Command already has flags
-        full_cmd = test_cmd
+        if test_list:
+            test_args = ' '.join(test_list)
+            full_cmd = f"{test_cmd} {test_args}"
+        else:
+            full_cmd = test_cmd
 
     print(f"Running tests: {full_cmd[:200]}...")
 
@@ -413,13 +488,23 @@ def evaluate_patch(
         # Step 5: Apply patches and run tests
         print(f"\n[3/5] Applying patches and running tests...")
 
-        # Get test lists
+        # Get test lists (may be JSON-encoded strings or lists)
         fail_to_pass = task.get('FAIL_TO_PASS', [])
         pass_to_pass = task.get('PASS_TO_PASS', [])
         test_patch = task.get('test_patch', '')
 
+        if isinstance(fail_to_pass, str):
+            fail_to_pass = json.loads(fail_to_pass)
+        if isinstance(pass_to_pass, str):
+            pass_to_pass = json.loads(pass_to_pass)
+
         print(f"FAIL_TO_PASS tests: {len(fail_to_pass)}")
         print(f"PASS_TO_PASS tests: {len(pass_to_pass)}")
+
+        # Resolve test names to full pytest paths using test_patch file
+        resolved_tests = resolve_test_names(fail_to_pass + pass_to_pass, test_patch)
+        if resolved_tests != fail_to_pass + pass_to_pass:
+            print(f"Resolved tests: {resolved_tests}")
 
         # Apply test_patch first (filters which tests to run)
         with apply_patch(test_patch, str(repo_path)) as test_patch_applied:
@@ -437,7 +522,7 @@ def evaluate_patch(
                     env_name,
                     str(repo_path),
                     setup.get('test_cmd', 'pytest'),
-                    test_list=fail_to_pass + pass_to_pass,
+                    test_list=resolved_tests,
                     repo_name=repo_name
                 )
 
