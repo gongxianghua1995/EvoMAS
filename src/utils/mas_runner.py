@@ -947,30 +947,19 @@ class MasRunner:
                 logger.info(f"Skipping evaluation for empty/error patch: {task_id}")
                 return None
 
-            # Evaluate the patch
-            from src.dataset.local_swe_evaluator import evaluate_patch
-            eval_result = evaluate_patch(
-                task_id,
-                patch_content,
-                dataset=self.dataset_name,
-                use_cache=True  # Keep env for future tasks
-            )
+            # Evaluate the patch using swebench docker harness
+            eval_result = self._evaluate_patch_via_docker(task_id, patch_content)
 
             # Log the result
             resolved = eval_result.get("resolved", "NO")
-            if resolved == "FULL":
-                logger.info(f"  {task_id}: FULL")
-            elif resolved == "PARTIAL":
-                logger.info(f"  {task_id}: PARTIAL")
-            else:
-                logger.info(f"  {task_id}: NO")
+            logger.info(f"  {task_id}: {resolved}")
 
             # Update the metadata entry in _all_metadata with evaluation results
             for meta in self._all_metadata:
                 if meta.get("task_id") == task_id:
                     meta["resolved"] = resolved
-                    meta["eval_fail_to_pass"] = eval_result.get("fail_to_pass", {})
-                    meta["eval_pass_to_pass"] = eval_result.get("pass_to_pass", {})
+                    meta["eval_resolved_ids"] = eval_result.get("resolved_ids", [])
+                    meta["eval_unresolved_ids"] = eval_result.get("unresolved_ids", [])
                     if "error" in eval_result:
                         meta["eval_error"] = eval_result["error"]
                     break
@@ -983,6 +972,111 @@ class MasRunner:
         except Exception as e:
             logger.warning(f"Failed to evaluate patch for {task_id}: {e}")
             return None
+
+    def _evaluate_patch_via_docker(self, task_id: str, patch_content: str) -> Dict[str, Any]:
+        """Evaluate a single patch using the swebench docker harness.
+
+        Constructs a predictions.json for this one instance, calls
+        ``swebench.run_evaluation`` (which starts a per-instance docker
+        container, applies the patch, runs FAIL_TO_PASS / PASS_TO_PASS
+        tests), then reads the summary report to determine resolved status.
+        """
+        import json as _json
+        import tempfile
+        import swebench
+
+        # Map our dataset_name to the HF dataset id swebench expects.
+        # NOTE: CLI passes e.g. "swe_bench_verified" (underscored folder name),
+        # but historical configs also pass "swebench_verified"; keep both keys.
+        ds_map = {
+            "swebench_verified": "SWE-bench/SWE-bench_Verified",
+            "swe_bench_verified": "SWE-bench/SWE-bench_Verified",
+            "swebench_lite":    "SWE-bench/SWE-bench_Lite",
+            "swe_bench_lite":    "SWE-bench/SWE-bench_Lite",
+            "swebench":          "SWE-bench/SWE-bench",
+        }
+        hf_dataset = ds_map.get(self.dataset_name, f"SWE-bench/SWE-bench_{self.dataset_name}")
+
+        config_name = self._get_config_name_with_model()
+        # Extract model name from config_name (e.g. "chatdev_Deepseek-V4-Flash-0731" -> "Deepseek-V4-Flash-0731")
+        model_name = config_name.split("_", 1)[1] if "_" in config_name else config_name
+        run_id = f"evomas_{task_id}"
+        report_dir = str(self.output_dir / self.dataset_name / config_name / "swebench_reports")
+
+        # Write single-instance predictions.json
+        # DICT format (keys = instance_id) — matches scripts/run_swebench_docker_eval.py
+        # and the previous successful full-domain evomas_docker run.
+        # NOTE: model_name_or_path needs the provider prefix to match what
+        # run_swebench_docker_eval writes ("openai/..." for Deepseek via LiteLLM).
+        if "/" not in model_name:
+            model_name_for_eval = f"openai/{model_name}"
+        else:
+            model_name_for_eval = model_name
+        preds = {
+            task_id: {
+                "instance_id": task_id,
+                "model_name_or_path": model_name_for_eval,
+                "model_patch": patch_content,
+            }
+        }
+        preds_file = self.output_dir / self.dataset_name / config_name / f"preds_{task_id}.json"
+        preds_file.parent.mkdir(parents=True, exist_ok=True)
+        preds_file.write_text(_json.dumps(preds, indent=2))
+
+        logger.info(f"Evaluating {task_id} via swebench docker harness...")
+        logger.info(f"  predictions: {preds_file}")
+        logger.info(f"  report_dir: {report_dir}")
+
+        swebench.run_evaluation(
+            dataset_name=hf_dataset,
+            split="test",
+            instance_ids=[task_id],
+            predictions_path=str(preds_file),
+            max_workers=1,
+            open_file_limit=4096,
+            run_id=run_id,
+            timeout=900,
+            rewrite_reports=True,
+            modal=False,
+            report_dir=report_dir,
+            task_repo=None,
+        )
+
+        # Read summary report: <report_dir>/<model_name>.<run_id>.json
+        summary_path = (
+            Path(report_dir)
+            / f"{model_name.replace('/', '__')}.{run_id}.json"
+        )
+        if not summary_path.exists():
+            logger.warning(f"swebench summary not found: {summary_path}")
+            return {"resolved": "NO", "error": "summary report not found"}
+
+        summary = _json.loads(summary_path.read_text())
+        resolved_ids = set(summary.get("resolved_ids", []))
+        unresolved_ids = set(summary.get("unresolved_ids", []))
+        empty_patch_ids = set(summary.get("empty_patch_ids", []))
+        error_ids = set(summary.get("error_ids", []))
+
+        if task_id in resolved_ids:
+            resolved = "FULL"
+        elif task_id in unresolved_ids:
+            resolved = "NO"
+        elif task_id in empty_patch_ids:
+            resolved = "EMPTY"
+        elif task_id in error_ids:
+            resolved = "ERROR"
+        else:
+            resolved = "NO"
+
+        logger.info(f"  {task_id}: {resolved} (resolved_ids={list(resolved_ids)[:3]}...")
+
+        return {
+            "resolved": resolved,
+            "resolved_ids": list(resolved_ids),
+            "unresolved_ids": list(unresolved_ids),
+            "empty_patch_ids": list(empty_patch_ids),
+            "error_ids": list(error_ids),
+        }
 
     def _save_consolidated_results(self):
         """
@@ -1067,7 +1161,7 @@ class MasRunner:
         # Default: return as-is (strip whitespace)
         return output.strip()
 
-    def _run_with_timeout(self, task_query: str, timeout: float) -> Tuple[str, Dict[str, Any]]:
+    def _run_with_timeout(self, task_query: str, timeout: float, instance_id: str = None) -> Tuple[str, Dict[str, Any]]:
         """
         Run MAS with a timeout.
 
@@ -1082,7 +1176,7 @@ class MasRunner:
             TimeoutError: If the task exceeds the timeout (but includes partial metadata)
         """
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self._runtime.run, task_query)
+            future = executor.submit(self._runtime.run, task_query, instance_id)
             try:
                 result, metadata = future.result(timeout=timeout)
                 return result, metadata
@@ -1292,9 +1386,9 @@ Do NOT include any explanations, markdown formatting, or other text. ONLY output
             task_start_time = time.time()
             if self.task_timeout and self.task_timeout > 0:
                 logger.info(f"Running task with {self.task_timeout:.0f}s timeout...")
-                result, metadata = self._run_with_timeout(task_query, self.task_timeout)
+                result, metadata = self._run_with_timeout(task_query, self.task_timeout, instance_id=task_id)
             else:
-                result, metadata = self._runtime.run(task_query)
+                result, metadata = self._runtime.run(task_query, instance_id=task_id)
             duration_seconds = time.time() - task_start_time
 
             if self.verbose:
@@ -1553,9 +1647,9 @@ Do NOT include any explanations, markdown formatting, or other text. ONLY output
 
                 # Run MAS with timeout - returns (result, metadata)
                 if self.task_timeout and self.task_timeout > 0:
-                    result, metadata = self._run_with_timeout(task_query, self.task_timeout)
+                    result, metadata = self._run_with_timeout(task_query, self.task_timeout, instance_id=task.id)
                 else:
-                    result, metadata = self._runtime.run(task_query)
+                    result, metadata = self._runtime.run(task_query, instance_id=task.id)
 
                 # Calculate execution time
                 execution_time = time.time() - start_time
@@ -1593,6 +1687,15 @@ Do NOT include any explanations, markdown formatting, or other text. ONLY output
 
                 # Save individual output if enabled
                 self._save_task_output(task, mas_result)
+
+                # Evaluate patch immediately if evaluate_on_save is enabled (per-task eval)
+                if self.evaluate_on_save:
+                    eval_result = self._evaluate_patch_on_save(task.id, mas_result)
+                    if eval_result:
+                        resolved = eval_result.get("resolved", "NO")
+                        mas_result.correct = (resolved == "FULL")
+                        mas_result.metadata = mas_result.metadata or {}
+                        mas_result.metadata["resolved"] = resolved
 
                 results.append(mas_result)
 

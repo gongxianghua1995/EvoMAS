@@ -229,6 +229,7 @@ CONFIG_ALIASES = {
 try:
     from minisweagent.agents.default import DefaultAgent, AgentConfig
     from minisweagent.environments.local import LocalEnvironment
+    from minisweagent.environments.docker import DockerEnvironment
     from minisweagent import Model
     MINISWEAGENT_AVAILABLE = True
 except ImportError:
@@ -237,6 +238,7 @@ except ImportError:
     DefaultAgent = None
     AgentConfig = None
     LocalEnvironment = None
+    DockerEnvironment = None
 
 
 def get_config_path(config_spec: str) -> Path:
@@ -377,6 +379,7 @@ class MinisweagentRunner(BaseAgentRunner):
         self,
         working_dir: Optional[Path] = None,
         config: str = "default",
+        use_docker: bool = False,
         **kwargs
     ):
         """
@@ -385,12 +388,16 @@ class MinisweagentRunner(BaseAgentRunner):
         Args:
             working_dir: Working directory for code execution
             config: Configuration name ("default", "simple", "swebench") or path
+            use_docker: If True, run agent inside per-instance SWE-bench docker
+                container (image: swebench/sweb.eval.x86_64.<repo>_<issue>:latest).
+                Requires instance_id in context at run() time.
         """
         if not MINISWEAGENT_AVAILABLE:
             logger.warning("mini-swe-agent not available, runner will fail")
 
         self.working_dir = working_dir or Path.cwd()
         self.config_name = config
+        self.use_docker = use_docker
 
         # Load configuration
         try:
@@ -415,8 +422,16 @@ class MinisweagentRunner(BaseAgentRunner):
         logger.info(f"  step_limit: {self.agent_config.get('step_limit', 'default')}")
         logger.info(f"  cost_limit: {self.agent_config.get('cost_limit', 'default')}")
 
-    def create_agent(self, spec: AgentSpec, working_dir: Path) -> Any:
-        """Create a mini-swe-agent with configured settings."""
+    def create_agent(self, spec: AgentSpec, working_dir: Path, instance_id: str = None) -> Any:
+        """Create a mini-swe-agent with configured settings.
+
+        Args:
+            spec: Agent specification
+            working_dir: Working directory (used as cwd for LocalEnvironment;
+                ignored when use_docker=True since container has /testbed)
+            instance_id: SWE-bench instance id (required when use_docker=True
+                to resolve the per-instance docker image name)
+        """
         if not MINISWEAGENT_AVAILABLE:
             raise ImportError("mini-swe-agent is not available")
 
@@ -473,13 +488,35 @@ class MinisweagentRunner(BaseAgentRunner):
         # Log every step's IN/OUT to run.log.
         _wrap_query_with_step_logger(model, spec.id, work_dir=working_dir)
 
-        # Create local environment
-        local_env_config = {
-            'cwd': str(working_dir),
-            'timeout': self.env_config.get('timeout', 60),
-            'env': self.env_config.get('env', {})
-        }
-        env = LocalEnvironment(**local_env_config)
+        # Create environment: docker (per-instance SWE-bench image) or local
+        if self.use_docker:
+            if not instance_id:
+                raise RuntimeError(
+                    "use_docker=True requires instance_id in context to resolve "
+                    "the per-instance docker image name"
+                )
+            # Docker tag naming convention from swebench: __ -> _1776_
+            iid_docker = instance_id.replace("__", "_1776_").lower()
+            image_name = f"swebench/sweb.eval.x86_64.{iid_docker}:latest"
+            logger.info(f"Using DockerEnvironment, image={image_name}")
+            env = DockerEnvironment(
+                image=image_name,
+                cwd='/testbed',
+                env=self.env_config.get('env', {}),
+                forward_env=[
+                    "OPENAI_API_KEY", "OPENAI_BASE_URL",
+                    "LITELLM_API_KEY", "LITELLM_BASE_URL",
+                    "MSWEA_COST_TRACKING",
+                ],
+                container_timeout=self.env_config.get('container_timeout', '2h'),
+            )
+        else:
+            local_env_config = {
+                'cwd': str(working_dir),
+                'timeout': self.env_config.get('timeout', 60),
+                'env': self.env_config.get('env', {})
+            }
+            env = LocalEnvironment(**local_env_config)
 
         # Prepare agent config - replace /testbed with actual path
         agent_config = self.agent_config.copy()
@@ -593,7 +630,7 @@ class MinisweagentRunner(BaseAgentRunner):
             logger.info(f"Running mini-swe-agent in isolated dir: {work_dir}")
 
         try:
-            agent = self.create_agent(spec, work_dir)
+            agent = self.create_agent(spec, work_dir, instance_id=instance_id)
 
             # Enhance task with context
             enhanced_task = task

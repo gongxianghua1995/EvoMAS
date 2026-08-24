@@ -46,3 +46,5 @@ execution:
   parallel_workers: false
   timeout: 900
   max_retries: 0
+  use_docker: true
+  agent_config: swebench

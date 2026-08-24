@@ -73,6 +73,10 @@ class MasRuntime:
         RunnerClass = _get_runner_class(backend)
         if backend == "smolagents":
             runner = RunnerClass()
+        elif backend == "minisweagent":
+            use_docker = getattr(self.mas_spec.execution, 'use_docker', False)
+            runner = RunnerClass(config=agent_config, use_docker=use_docker)
+            logger.info(f"Created {RunnerClass.__name__} with config: {agent_config}, use_docker={use_docker}")
         else:
             runner = RunnerClass(config=agent_config)
             logger.info(f"Created {RunnerClass.__name__} with config: {agent_config}")
@@ -109,11 +113,13 @@ class MasRuntime:
 
         return self._get_runner(backend)
 
-    def run(self, task: str) -> tuple:
+    def run(self, task: str, instance_id: str = None) -> tuple:
         """Execute the MAS on a given task.
 
         Args:
             task: The task/query to process
+            instance_id: Optional SWE-bench instance id (used by minisweagent
+                runner to resolve the per-instance docker image when use_docker=True)
 
         Returns:
             Tuple of (final_result: str, metadata: dict) containing:
@@ -125,7 +131,7 @@ class MasRuntime:
         logger.info("=" * 60)
 
         # Initialize context
-        context = Context(task=task)
+        context = Context(task=task, instance_id=instance_id)
 
         # Get execution order
         execution_order = self.mas_spec.get_execution_order()
