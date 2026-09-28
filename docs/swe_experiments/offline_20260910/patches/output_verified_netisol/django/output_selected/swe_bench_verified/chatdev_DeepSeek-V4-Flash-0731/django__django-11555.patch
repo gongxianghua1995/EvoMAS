@@ -1,0 +1,75 @@
+diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py
+index eaccc96d7d..c8fd5ed6fc 100644
+--- a/django/db/models/sql/compiler.py
++++ b/django/db/models/sql/compiler.py
+@@ -5,7 +5,7 @@ from itertools import chain
+ 
+ from django.core.exceptions import EmptyResultSet, FieldError
+ from django.db.models.constants import LOOKUP_SEP
+-from django.db.models.expressions import OrderBy, Random, RawSQL, Ref, Value
++from django.db.models.expressions import F, OrderBy, Random, RawSQL, Ref, Value
+ from django.db.models.functions import Cast
+ from django.db.models.query_utils import QueryWrapper, select_related_descend
+ from django.db.models.sql.constants import (
+@@ -697,6 +697,37 @@ class SQLCompiler:
+                     params.append(p)
+         return result, params
+ 
++    def _resolve_ordering_expr(self, expr, opts, alias, default_order='ASC'):
++        """Resolve an expression (e.g., OrderBy, F, Lower) for ordering."""
++        if isinstance(expr, Value):
++            # output_field must be resolved for constants.
++            expr = Cast(expr, expr.output_field)
++        if not isinstance(expr, OrderBy):
++            expr = expr.asc()
++        if default_order == 'DESC':
++            expr = expr.copy()
++            expr.reverse_ordering()
++        # Resolve field references in the expression against the correct model.
++        resolved = self._resolve_expression_refs(expr, opts, alias)
++        return [(resolved, False)]
++
++    def _resolve_expression_refs(self, expr, opts, alias):
++        """Recursively resolve F references in the expression."""
++        if isinstance(expr, F):
++            pieces = expr.name.split(LOOKUP_SEP)
++            field, targets, new_alias, joins, path, new_opts, transform_function = (
++                self._setup_joins(pieces, opts, alias)
++            )
++            return transform_function(targets[0], new_alias)
++        if hasattr(expr, 'get_source_expressions'):
++            c = expr.copy()
++            c.set_source_expressions([
++                self._resolve_expression_refs(src, opts, alias) if src else None
++                for src in c.get_source_expressions()
++            ])
++            return c
++        return expr
++
+     def find_ordering_name(self, name, opts, alias=None, default_order='ASC',
+                            already_seen=None):
+         """
+@@ -704,6 +735,9 @@ class SQLCompiler:
+         not be) and column name for ordering by the given 'name' parameter.
+         The 'name' is of the form 'field1__field2__...__fieldN'.
+         """
++        if hasattr(name, 'resolve_expression'):
++            return self._resolve_ordering_expr(name, opts, alias, default_order)
++
+         name, order = get_order_dir(name, default_order)
+         descending = order == 'DESC'
+         pieces = name.split(LOOKUP_SEP)
+@@ -722,8 +756,11 @@ class SQLCompiler:
+ 
+             results = []
+             for item in opts.ordering:
+-                results.extend(self.find_ordering_name(item, opts, alias,
+-                                                       order, already_seen))
++                if hasattr(item, 'resolve_expression'):
++                    results.extend(self._resolve_ordering_expr(item, opts, alias, order))
++                else:
++                    results.extend(self.find_ordering_name(item, opts, alias,
++                                                           order, already_seen))
+             return results
+         targets, alias, _ = self.query.trim_joins(targets, joins, path)
+         return [(OrderBy(transform_function(t, alias), descending=descending), False) for t in targets]

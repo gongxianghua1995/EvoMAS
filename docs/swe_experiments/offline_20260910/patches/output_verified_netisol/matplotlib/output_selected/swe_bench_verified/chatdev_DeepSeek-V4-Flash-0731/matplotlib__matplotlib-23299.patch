@@ -1,0 +1,13 @@
+diff --git a/lib/matplotlib/__init__.py b/lib/matplotlib/__init__.py
+index c268a56724..dceb762d97 100755
+--- a/lib/matplotlib/__init__.py
++++ b/lib/matplotlib/__init__.py
+@@ -1095,6 +1095,10 @@ def rc_context(rc=None, fname=None):
+             rcParams.update(rc)
+         yield
+     finally:
++        # Avoid reverting the backend to the auto sentinel if it has already
++        # been resolved to an actual backend.
++        if orig.get("backend") is rcsetup._auto_backend_sentinel:
++            dict.__delitem__(orig, "backend")
+         dict.update(rcParams, orig)  # Revert to the original rcs.

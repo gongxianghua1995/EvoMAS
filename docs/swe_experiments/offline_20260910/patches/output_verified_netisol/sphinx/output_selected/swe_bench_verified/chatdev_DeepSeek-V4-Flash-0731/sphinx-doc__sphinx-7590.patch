@@ -1,0 +1,84 @@
+diff --git a/sphinx/domains/cpp.py b/sphinx/domains/cpp.py
+index fe52d881d..7dc2a2bd7 100644
+--- a/sphinx/domains/cpp.py
++++ b/sphinx/domains/cpp.py
+@@ -37,6 +37,7 @@ from sphinx.util.cfamily import (
+     hex_literal_re, binary_literal_re, float_literal_re,
+     char_literal_re
+ )
++_udl_suffix_re = re.compile(r'[a-zA-Z_][a-zA-Z0-9_]*\b')
+ from sphinx.util.docfields import Field, GroupedField
+ from sphinx.util.docutils import SphinxDirective
+ from sphinx.util.nodes import make_refnode
+@@ -856,9 +857,10 @@ class ASTStringLiteral(ASTLiteral):
+ 
+ 
+ class ASTCharLiteral(ASTLiteral):
+-    def __init__(self, prefix: str, data: str) -> None:
++    def __init__(self, prefix: str, data: str, suffix: str = '') -> None:
+         self.prefix = prefix  # may be None when no prefix
+         self.data = data
++        self.suffix = suffix or ''
+         assert prefix in _id_char_from_prefix
+         self.type = _id_char_from_prefix[prefix]
+         decoded = data.encode().decode('unicode-escape')
+@@ -869,9 +871,9 @@ class ASTCharLiteral(ASTLiteral):
+ 
+     def _stringify(self, transform: StringifyTransform) -> str:
+         if self.prefix is None:
+-            return "'" + self.data + "'"
++            return "'" + self.data + "'" + self.suffix
+         else:
+-            return self.prefix + "'" + self.data + "'"
++            return self.prefix + "'" + self.data + "'" + self.suffix
+ 
+     def get_id(self, version: int) -> str:
+         return self.type + str(self.value)
+@@ -4643,6 +4645,13 @@ class DefinitionParser(BaseParser):
+             self.pos += 1
+         return self.definition[startPos:self.pos]
+ 
++    def _parse_udl_suffix(self) -> str:
++        # user-defined literal suffix is an identifier
++        if self.current_char in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_':
++            if self.match(_udl_suffix_re):
++                return self.matched_text
++        return None
++
+     def _parse_literal(self) -> ASTLiteral:
+         # -> integer-literal
+         #  | character-literal
+@@ -4664,25 +4673,31 @@ class DefinitionParser(BaseParser):
+             if self.match(regex):
+                 while self.current_char in 'uUlLfF':
+                     self.pos += 1
++                # user-defined literal suffix
++                self._parse_udl_suffix()
+                 return ASTNumberLiteral(self.definition[pos:self.pos])
+ 
+         string = self._parse_string()
+         if string is not None:
++            # user-defined literal suffix
++            suffix = self._parse_udl_suffix()
++            if suffix:
++                string += suffix
+             return ASTStringLiteral(string)
+ 
+         # character-literal
+         if self.match(char_literal_re):
+             prefix = self.last_match.group(1)  # may be None when no prefix
+             data = self.last_match.group(2)
++            suffix = self._parse_udl_suffix()
+             try:
+-                return ASTCharLiteral(prefix, data)
++                return ASTCharLiteral(prefix, data, suffix)
+             except UnicodeDecodeError as e:
+                 self.fail("Can not handle character literal. Internal error was: %s" % e)
+             except UnsupportedMultiCharacterCharLiteral:
+                 self.fail("Can not handle character literal"
+                           " resulting in multiple decoded characters.")
+ 
+-        # TODO: user-defined lit
+         return None
+ 
+     def _parse_fold_or_paren_expression(self) -> ASTExpression:

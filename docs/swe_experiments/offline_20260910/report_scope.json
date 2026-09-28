@@ -1,0 +1,14 @@
+{
+  "reported_verified": {
+    "total": 154,
+    "resolved": 106
+  },
+  "reported_pro": {
+    "total": 216,
+    "resolved": 65
+  },
+  "selection": "Historical reports combine original runs and optimized reruns; Pro explicitly uses best-of and excludes 15 empty-patch false positives.",
+  "warning": "Attempt resolved fields include historical/stale evaluator states. They are exported unchanged, not a new final selection. Do not sum FULL statuses or treat these as single-run scores.",
+  "protocol": "F2P test names injected; not protocol-identical to GPTSwarm/MetaGPT.",
+  "tokens": "Historical counters have incomplete coverage and are not comparable to full API usage totals."
+}

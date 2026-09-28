@@ -1,0 +1,14 @@
+diff --git a/django/urls/resolvers.py b/django/urls/resolvers.py
+index af0508f94e..54e8d3e96f 100644
+--- a/django/urls/resolvers.py
++++ b/django/urls/resolvers.py
+@@ -617,6 +617,9 @@ class URLResolver:
+                         continue
+                     candidate_subs = dict(zip(params, args))
+                 else:
++                    # Remove any kwargs that are None, as they represent
++                    # optional groups that weren't captured.
++                    kwargs = {k: v for k, v in kwargs.items() if v is not None}
+                     if set(kwargs).symmetric_difference(params).difference(defaults):
+                         continue
+                     if any(kwargs.get(k, v) != v for k, v in defaults.items()):

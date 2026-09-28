@@ -9,6 +9,7 @@ with different configurations and datasets, replacing the need for individual ru
 import logging
 import fcntl
 import os
+import re
 import signal
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union, Tuple
@@ -18,6 +19,105 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 import time
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_hunk_header(line: str):
+    m = re.match(r'^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@', line)
+    if not m:
+        return None
+    old_len = int(m.group(1)) if m.group(1) else 1
+    new_len = int(m.group(2)) if m.group(2) else 1
+    return old_len, new_len
+
+
+def _validate_diff_completeness(diff_text: str) -> bool:
+    """Check if all hunks in the diff have enough lines per their @@ headers."""
+    lines = diff_text.split('\n')
+    in_hunk = False
+    expected_old = expected_new = actual_old = actual_new = 0
+    for line in lines:
+        if line.startswith('@@'):
+            if in_hunk and (actual_old < expected_old or actual_new < expected_new):
+                return False
+            in_hunk = True
+            h = _parse_hunk_header(line)
+            if h:
+                expected_old, expected_new = h
+                actual_old = actual_new = 0
+        elif in_hunk:
+            if line.startswith('-'):
+                actual_old += 1
+            elif line.startswith('+'):
+                actual_new += 1
+            else:
+                actual_old += 1
+                actual_new += 1
+    if in_hunk and (actual_old < expected_old or actual_new < expected_new):
+        return False
+    return True
+
+
+def _complete_truncated_diff(diff_text: str) -> str:
+    """Use LLM to complete a truncated diff's last hunk."""
+    if not diff_text.startswith('diff --git'):
+        return diff_text
+    if _validate_diff_completeness(diff_text):
+        return diff_text
+    lines = diff_text.split('\n')
+    last_hunk_start = None
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].startswith('@@'):
+            last_hunk_start = i
+            break
+    if last_hunk_start is None:
+        return diff_text
+    hunk_header = lines[last_hunk_start]
+    existing = lines[last_hunk_start + 1:]
+    h = _parse_hunk_header(hunk_header)
+    if not h:
+        return diff_text
+    expected_old, expected_new = h
+    actual_ctx = sum(1 for l in existing if l and not l.startswith(('-', '+')))
+    actual_old = sum(1 for l in existing if l.startswith('-')) + actual_ctx
+    actual_new = sum(1 for l in existing if l.startswith('+')) + actual_ctx
+    missing_old = expected_old - actual_old
+    missing_new = expected_new - actual_new
+    if missing_old <= 0 and missing_new <= 0:
+        return diff_text
+    prompt = (
+        f"The following unified diff hunk is truncated. The hunk header declares "
+        f"{expected_old} old lines and {expected_new} new lines, but only "
+        f"{actual_old} old and {actual_new} new are present.\n\n"
+        f"Hunk header: {hunk_header}\n"
+        f"Existing lines:\n{chr(10).join(existing)}\n\n"
+        f"Output ONLY the {missing_old} missing old-context/removed lines and "
+        f"{missing_new} missing new-context/added lines to complete this hunk. "
+        f"Use proper unified diff line prefixes (space/-/+). No explanation."
+    )
+    try:
+        import litellm
+        api_base = os.environ.get("OPENAI_BASE_URL") or os.environ.get("API_BASE")
+        api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("API_KEY")
+        resp = litellm.completion(
+            model="openai/Deepseek-V4-Flash-0731",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=4096,
+            temperature=0.3,
+            api_base=api_base,
+            api_key=api_key,
+        )
+        completion = resp.choices[0].message.content.strip()
+        completion = re.sub(r'^```[a-z]*\n?', '', completion)
+        completion = re.sub(r'\n?```$', '', completion).strip()
+        fixed = diff_text.rstrip('\n') + '\n' + completion
+        if not fixed.endswith('\n'):
+            fixed += '\n'
+        logger.info(f"Diff completion: added {len(completion)} chars, "
+                    f"valid={_validate_diff_completeness(fixed)}")
+        return fixed
+    except Exception as e:
+        logger.warning(f"Failed to complete truncated diff: {e}")
+        return diff_text
 
 REPOS_DIR = os.environ.get(
     "EVOMAS_REPOS_DIR",
@@ -874,6 +974,10 @@ class MasRunner:
         if result.result:
             # Clean the result to extract final answer
             content_to_save = self._clean_output(result.result)
+            # Fix truncated diffs (model hit max_tokens mid-hunk)
+            if content_to_save.startswith('diff --git') and not _validate_diff_completeness(content_to_save):
+                logger.info(f"Detected truncated diff for {result.task_id}, attempting completion...")
+                content_to_save = _complete_truncated_diff(content_to_save)
         elif result.error:
             # Only save error if there's no result
             content_to_save = f"ERROR: {result.error}"
@@ -1000,30 +1104,43 @@ class MasRunner:
         config_name = self._get_config_name_with_model()
         # Extract model name from config_name (e.g. "chatdev_Deepseek-V4-Flash-0731" -> "Deepseek-V4-Flash-0731")
         model_name = config_name.split("_", 1)[1] if "_" in config_name else config_name
-        run_id = f"evomas_{task_id}"
-        report_dir = str(self.output_dir / self.dataset_name / config_name / "swebench_reports")
 
-        # Write single-instance predictions.json
-        # DICT format (keys = instance_id) — matches scripts/run_swebench_docker_eval.py
-        # and the previous successful full-domain evomas_docker run.
-        # NOTE: model_name_or_path needs the provider prefix to match what
-        # run_swebench_docker_eval writes ("openai/..." for Deepseek via LiteLLM).
+        # repo_simple = the short repo name used in docker image / domain dir
+        # e.g. django__django-10554 -> "django", sphinx-doc__sphinx-10323 -> "sphinx-doc"
+        repo_simple = task_id.split("__", 1)[0]
+
+        # Align run_id / report_dir / predictions with run_swebench_docker_eval.py
+        # so per-case reports land in logs/run_evaluation/evomas_docker_<repo>/...
+        # and swebench summary reports go to the shared logs/swebench_reports directory.
+        # This also means domain sweeps can be re-run later and transparently reuse
+        # --skip-existing.
+        run_id = f"evomas_docker_{repo_simple}"
+        # Use project-level shared report dir — matches run_swebench_docker_eval.py default.
+        project_root = Path(__file__).resolve().parent.parent.parent
+        report_dir = str(project_root / "logs" / "swebench_reports")
+
+        # Write single-instance predictions.json under the per-domain patch dir
+        # (sibling to <task_id>.txt and results.json), matching sweep output layout.
+        # predictions file: /tmp/preds_<task_id>.json  — swebench doesn't care as long
+        # as the DICT format / model_name_or_path prefix is consistent.
         if "/" not in model_name:
             model_name_for_eval = f"openai/{model_name}"
         else:
             model_name_for_eval = model_name
-        preds = {
-            task_id: {
-                "instance_id": task_id,
-                "model_name_or_path": model_name_for_eval,
-                "model_patch": patch_content,
-            }
-        }
-        preds_file = self.output_dir / self.dataset_name / config_name / f"preds_{task_id}.json"
-        preds_file.parent.mkdir(parents=True, exist_ok=True)
-        preds_file.write_text(_json.dumps(preds, indent=2))
+        preds = [{
+            "instance_id": task_id,
+            "model_name_or_path": model_name_for_eval,
+            "model_patch": patch_content,
+        }]
+        preds_tmp = tempfile.NamedTemporaryFile(
+            "w", suffix=".json", prefix=f"preds_{task_id}_", delete=False
+        )
+        preds_tmp.write(_json.dumps(preds, indent=2))
+        preds_tmp.close()
+        preds_file = Path(preds_tmp.name)
 
         logger.info(f"Evaluating {task_id} via swebench docker harness...")
+        logger.info(f"  model: {model_name_for_eval}  run_id: {run_id}")
         logger.info(f"  predictions: {preds_file}")
         logger.info(f"  report_dir: {report_dir}")
 
@@ -1036,16 +1153,24 @@ class MasRunner:
             open_file_limit=4096,
             run_id=run_id,
             timeout=900,
-            rewrite_reports=True,
+            rewrite_reports=False,
             modal=False,
             report_dir=report_dir,
             task_repo=None,
         )
 
-        # Read summary report: <report_dir>/<model_name>.<run_id>.json
+        # Clean up predictions tempfile — no longer needed after evaluation
+        try:
+            preds_file.unlink()
+        except Exception:
+            pass
+
+        # Read summary report: <report_dir>/<model_name_with_slashes_escaped>.<run_id>.json
+        # NOTE: when using provider prefix (openai/...), the filename uses "__" for "/"
+        # which matches run_swebench_docker_eval.py.
         summary_path = (
             Path(report_dir)
-            / f"{model_name.replace('/', '__')}.{run_id}.json"
+            / f"{model_name_for_eval.replace('/', '__')}.{run_id}.json"
         )
         if not summary_path.exists():
             logger.warning(f"swebench summary not found: {summary_path}")
@@ -1161,7 +1286,7 @@ class MasRunner:
         # Default: return as-is (strip whitespace)
         return output.strip()
 
-    def _run_with_timeout(self, task_query: str, timeout: float, instance_id: str = None) -> Tuple[str, Dict[str, Any]]:
+    def _run_with_timeout(self, task_query: str, timeout: float, instance_id: str = None, dockerhub_tag: str = None) -> Tuple[str, Dict[str, Any]]:
         """
         Run MAS with a timeout.
 
@@ -1176,7 +1301,7 @@ class MasRunner:
             TimeoutError: If the task exceeds the timeout (but includes partial metadata)
         """
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self._runtime.run, task_query, instance_id)
+            future = executor.submit(self._runtime.run, task_query, instance_id, dockerhub_tag)
             try:
                 result, metadata = future.result(timeout=timeout)
                 return result, metadata
@@ -1350,11 +1475,21 @@ class MasRunner:
                     if backend in ("minisweagent", "sweagent"):
                         # For minisweagent/sweagent: pass minimal info, let agent's config templates handle formatting
                         # The instance_template in config uses {{task}} for the problem statement
+                        # Include FAIL_TO_PASS tests to help agent understand test requirements
+                        fail_to_pass = ""
+                        if hasattr(task, 'metadata') and task.metadata:
+                            ftp = task.metadata.get('FAIL_TO_PASS', [])
+                            if ftp:
+                                if isinstance(ftp, list):
+                                    fail_to_pass = "\n\nFailing Tests (must all pass after fix):\n" + "\n".join(f"  - {t}" for t in ftp)
+                                else:
+                                    fail_to_pass = f"\n\nFailing Tests (must all pass after fix):\n{ftp}"
+
                         task_query = f"""Repository: {repo_path}
 Instance ID: {task.id}
 
 Problem Statement:
-{task.query}"""
+{task.query}{fail_to_pass}"""
                     else:
                         # For other backends (smolagents, etc.): include explicit instructions
                         task_query = f"""Repository: {repo_path}
@@ -1384,11 +1519,12 @@ Do NOT include any explanations, markdown formatting, or other text. ONLY output
 
             # Run MAS with timeout - returns tuple of (result, metadata)
             task_start_time = time.time()
+            dockerhub_tag = task.metadata.get('dockerhub_tag') if hasattr(task, 'metadata') and task.metadata else None
             if self.task_timeout and self.task_timeout > 0:
                 logger.info(f"Running task with {self.task_timeout:.0f}s timeout...")
-                result, metadata = self._run_with_timeout(task_query, self.task_timeout, instance_id=task_id)
+                result, metadata = self._run_with_timeout(task_query, self.task_timeout, instance_id=instance_id, dockerhub_tag=dockerhub_tag)
             else:
-                result, metadata = self._runtime.run(task_query, instance_id=task_id)
+                result, metadata = self._runtime.run(task_query, instance_id=instance_id, dockerhub_tag=dockerhub_tag)
             duration_seconds = time.time() - task_start_time
 
             if self.verbose:
@@ -1567,6 +1703,8 @@ Do NOT include any explanations, markdown formatting, or other text. ONLY output
             repo_path = None
             repo_lock = None
             wb_lock = None
+            result = None
+            metadata = None
 
             try:
                 # For WorkBench, acquire per-domain locks BEFORE resetting state
@@ -1613,8 +1751,9 @@ Do NOT include any explanations, markdown formatting, or other text. ONLY output
                             logger.info(f"Acquired lock for {repo_path}")
 
                             # Checkout base_commit before running agent (critical for SWE-bench)
+                            # Skip when repo doesn't exist on host — docker image already has correct base commit
                             base_commit = task.metadata.get('base_commit') if task.metadata else None
-                            if base_commit:
+                            if base_commit and Path(repo_path).exists():
                                 if not self._checkout_base_commit(repo_path, base_commit):
                                     raise RuntimeError(f"Failed to checkout base commit {base_commit[:8]} for {task.id}")
 
@@ -1646,10 +1785,11 @@ Do NOT include any explanations, markdown formatting, or other text. ONLY output
                             logger.warning(f"Repository path not found for SWE-bench instance {task.id}: {repo_path}")
 
                 # Run MAS with timeout - returns (result, metadata)
+                dockerhub_tag = task.metadata.get('dockerhub_tag') if hasattr(task, 'metadata') and task.metadata else None
                 if self.task_timeout and self.task_timeout > 0:
-                    result, metadata = self._run_with_timeout(task_query, self.task_timeout, instance_id=task.id)
+                    result, metadata = self._run_with_timeout(task_query, self.task_timeout, instance_id=task.id, dockerhub_tag=dockerhub_tag)
                 else:
-                    result, metadata = self._runtime.run(task_query, instance_id=task.id)
+                    result, metadata = self._runtime.run(task_query, instance_id=task.id, dockerhub_tag=dockerhub_tag)
 
                 # Calculate execution time
                 execution_time = time.time() - start_time
@@ -1708,10 +1848,10 @@ Do NOT include any explanations, markdown formatting, or other text. ONLY output
                 # Preserve result and metadata if agent ran successfully before error
                 mas_result = MasRunResult(
                     task_id=task.id,
-                    result=result if 'result' in locals() else None,
+                    result=result,
                     error=str(e),
                     ground_truth=task.gt,
-                    metadata=metadata if 'metadata' in locals() else None
+                    metadata=metadata
                 )
 
                 # Save individual output even for errors

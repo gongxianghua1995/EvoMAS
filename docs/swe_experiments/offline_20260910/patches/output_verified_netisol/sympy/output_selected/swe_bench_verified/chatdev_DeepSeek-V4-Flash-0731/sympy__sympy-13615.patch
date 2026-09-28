@@ -1,0 +1,40 @@
+diff --git a/sympy/sets/fancysets.py b/sympy/sets/fancysets.py
+index 4a61f1f42..9f8dd2491 100644
+--- a/sympy/sets/fancysets.py
++++ b/sympy/sets/fancysets.py
+@@ -1391,6 +1391,18 @@ def _contains(self, other):
+         # self in rectangular form
+         if not self.polar:
+             re, im = other if isTuple else other.as_real_imag()
++            if not isTuple:
++                # For Symbols/Exprs, only return True when the And
++                # evaluates to S.true; return None when inconclusive
++                result = False
++                for element in self.psets:
++                    c = And(element.args[0]._contains(re),
++                            element.args[1]._contains(im))
++                    if c is S.true:
++                        return True
++                    elif c is not S.false:
++                        result = None
++                return result
+             for element in self.psets:
+                 if And(element.args[0]._contains(re),
+                         element.args[1]._contains(im)):
+@@ -1405,6 +1417,16 @@ def _contains(self, other):
+                 r, theta = S.Zero, S.Zero
+             else:
+                 r, theta = Abs(other), arg(other)
++            if not isTuple:
++                result = False
++                for element in self.psets:
++                    c = And(element.args[0]._contains(r),
++                            element.args[1]._contains(theta))
++                    if c is S.true:
++                        return True
++                    elif c is not S.false:
++                        result = None
++                return result
+             for element in self.psets:
+                 if And(element.args[0]._contains(r),
+                         element.args[1]._contains(theta)):

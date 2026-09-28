@@ -1,0 +1,7 @@
+[
+  {
+    "instance_id": "instance_flipt-io__flipt-0fd09def402258834b9d6c0eaa6d3b4ab93b4446",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: '/home/xhgong/project/EvoMAS/dataset/swe_bench_pro/setup_map.json'"
+  }
+]

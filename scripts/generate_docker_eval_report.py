@@ -15,16 +15,16 @@ Usage
 # After run_chatdev_baseline_run_20260822.sh finishes:
 python scripts/generate_docker_eval_report.py \
     --output-root output_run_20260822 \
-    --report-dir /tmp/evomas_swebench_reports_20260822 \
+    --report-dir logs/swebench_reports_20260822 \
     --out-md output_paper/"ChatDev Baseline SWE-bench Verified 全域Docker评估报告.run_20260822.md"
 
 # Optional: also feed in a previous summary json for delta comparison (e.g. the
-# one from /tmp/evomas_swebench_reports/chatdev_Deepseek-V4-Flash-0731.evomas_docker_scikit-learn.json
+# one from logs/swebench_reports/chatdev_Deepseek-V4-Flash-0731.evomas_docker_scikit-learn.json
 # merged across 4 domains)
 python scripts/generate_docker_eval_report.py \
     --output-root output_run_20260822 \
-    --report-dir /tmp/evomas_swebench_reports_20260822 \
-    --prev-report-glob "/tmp/evomas_swebench_reports/chatdev_Deepseek-V4-Flash-0731.evomas_docker_*.json" \
+    --report-dir logs/swebench_reports_20260822 \
+    --prev-report-glob "logs/swebench_reports/chatdev_Deepseek-V4-Flash-0731.evomas_docker_*.json" \
     --prev-results-glob "output/chatdev_*/output_selected/swe_bench_verified/*/results.json" \
     --out-md output_paper/"ChatDev Baseline SWE-bench Verified 全域Docker评估报告.run_20260822.md"
 """
@@ -168,7 +168,7 @@ def main():
     ap.add_argument("--benchmark", default="SWE-bench Verified")
     ap.add_argument("--prev-report-glob", default=None,
                     help="Optional: glob to previous run's 4 domain summary jsons "
-                         "(e.g. '/tmp/evomas_swebench_reports/chatdev_Deepseek-V4-Flash-0731.evomas_docker_*.json') "
+                         "(e.g. 'logs/swebench_reports/chatdev_Deepseek-V4-Flash-0731.evomas_docker_*.json') "
                          "for delta comparison")
     ap.add_argument("--prev-results-glob", default=None,
                     help="Optional: glob to previous run's results.json for "

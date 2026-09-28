@@ -1,0 +1,32 @@
+diff --git a/sympy/physics/quantum/tensorproduct.py b/sympy/physics/quantum/tensorproduct.py
+index 9dd10d219..034743cda 100644
+--- a/sympy/physics/quantum/tensorproduct.py
++++ b/sympy/physics/quantum/tensorproduct.py
+@@ -345,6 +345,18 @@ def tensor_product_simp_Mul(e):
+         return e
+ 
+ 
++def tensor_product_simp_Pow(e):
++    """Simplify a Pow with TensorProducts.
++
++    Current the main use of this is to simplify a ``Pow`` of
++    ``TensorProduct``s to a ``TensorProduct`` of ``Pow``s.
++    """
++    if isinstance(e.base, TensorProduct):
++        return TensorProduct(*[arg**e.exp for arg in e.base.args])
++    else:
++        return tensor_product_simp(e.base) ** e.exp
++
++
+ def tensor_product_simp(e, **hints):
+     """Try to simplify and combine TensorProducts.
+ 
+@@ -382,7 +394,7 @@ def tensor_product_simp(e, **hints):
+     if isinstance(e, Add):
+         return Add(*[tensor_product_simp(arg) for arg in e.args])
+     elif isinstance(e, Pow):
+-        return tensor_product_simp(e.base) ** e.exp
++        return tensor_product_simp_Pow(e)
+     elif isinstance(e, Mul):
+         return tensor_product_simp_Mul(e)
+     elif isinstance(e, Commutator):

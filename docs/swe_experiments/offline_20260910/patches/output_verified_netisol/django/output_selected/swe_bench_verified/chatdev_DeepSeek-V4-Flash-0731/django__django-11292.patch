@@ -1,0 +1,37 @@
+diff --git a/django/core/management/__init__.py b/django/core/management/__init__.py
+index b8f47fa4a4..7ecd56d8f7 100644
+--- a/django/core/management/__init__.py
++++ b/django/core/management/__init__.py
+@@ -142,9 +142,6 @@ def call_command(command_name, *args, **options):
+         )
+     # Move positional args out of options to mimic legacy optparse
+     args = defaults.pop('args', ())
+-    if 'skip_checks' not in options:
+-        defaults['skip_checks'] = True
+-
+     return command.execute(*args, **defaults)
+ 
+ 
+diff --git a/django/core/management/base.py b/django/core/management/base.py
+index 0c3a981290..00fa3c5daf 100644
+--- a/django/core/management/base.py
++++ b/django/core/management/base.py
+@@ -223,7 +223,7 @@ class BaseCommand:
+     requires_system_checks = True
+     # Arguments, common to all commands, which aren't defined by the argument
+     # parser.
+-    base_stealth_options = ('skip_checks', 'stderr', 'stdout')
++    base_stealth_options = ('stderr', 'stdout')
+     # Command-specific options not defined by the argument parser.
+     stealth_options = ()
+ 
+@@ -286,6 +286,10 @@ class BaseCommand:
+             '--force-color', action='store_true',
+             help='Force colorization of the command output.',
+         )
++        parser.add_argument(
++            '--skip-checks', action='store_true',
++            help='Skip system checks.',
++        )
+         self.add_arguments(parser)
+         return parser

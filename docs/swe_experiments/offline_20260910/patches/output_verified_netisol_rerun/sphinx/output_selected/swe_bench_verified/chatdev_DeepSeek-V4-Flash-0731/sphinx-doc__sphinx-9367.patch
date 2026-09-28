@@ -1,0 +1,38 @@
+diff --git a/sphinx/pycode/ast.py b/sphinx/pycode/ast.py
+index f541ec0a9..1e6ba0c4d 100644
+--- a/sphinx/pycode/ast.py
++++ b/sphinx/pycode/ast.py
+@@ -200,12 +200,18 @@ class _UnparseVisitor(ast.NodeVisitor):
+                 not any(isinstance(elt, ast.Starred) for elt in value.elts)
+             )
+ 
++        def unparse_tuple_elts(elts: List[ast.expr]) -> str:
++            if len(elts) == 1:
++                return "%s," % self.visit(elts[0])
++            else:
++                return ", ".join(self.visit(e) for e in elts)
++
+         if is_simple_tuple(node.slice):
+-            elts = ", ".join(self.visit(e) for e in node.slice.elts)  # type: ignore
+-            return "%s[%s]" % (self.visit(node.value), elts)
++            return "%s[%s]" % (self.visit(node.value),
++                               unparse_tuple_elts(node.slice.elts))  # type: ignore
+         elif isinstance(node.slice, ast.Index) and is_simple_tuple(node.slice.value):
+-            elts = ", ".join(self.visit(e) for e in node.slice.value.elts)  # type: ignore
+-            return "%s[%s]" % (self.visit(node.value), elts)
++            return "%s[%s]" % (self.visit(node.value),
++                               unparse_tuple_elts(node.slice.value.elts))  # type: ignore
+         else:
+             return "%s[%s]" % (self.visit(node.value), self.visit(node.slice))
+ 
+@@ -213,7 +219,9 @@ class _UnparseVisitor(ast.NodeVisitor):
+         return "%s %s" % (self.visit(node.op), self.visit(node.operand))
+ 
+     def visit_Tuple(self, node: ast.Tuple) -> str:
+-        if node.elts:
++        if len(node.elts) == 1:
++            return "(%s,)" % self.visit(node.elts[0])
++        elif node.elts:
+             return "(" + ", ".join(self.visit(e) for e in node.elts) + ")"
+         else:
+             return "()"

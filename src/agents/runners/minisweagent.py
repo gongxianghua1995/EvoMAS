@@ -13,9 +13,11 @@ Configuration is loaded from:
 
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
+import uuid
 import yaml
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -58,11 +60,28 @@ def _count_tokens(text: str) -> int:
 # commits instead of editing the actual source files. Observed burning the full
 # step_limit (50) without a single file edit on psf/requests-1724.
 ACTION_FIRST_PREAMBLE = """IMPORTANT WORKFLOW GUIDANCE:
-- Your job is to WRITE A PATCH that fixes the bug, not to investigate how it was fixed historically.
-- Do NOT spend steps running `git log -S`, `git show <old-commit>`, or archaeology on past fixes. Those commits are from FUTURE versions and will mislead you.
-- Workflow: (1) `grep`/`sed -n` to locate the relevant code, (2) READ 10-20 lines of context, (3) EDIT the file directly, (4) run the repro/test ONCE, (5) SUBMIT.
-- If you have not edited any file by step 10, you are off-track — edit immediately.
-- Prefer one targeted edit over multiple exploratory commands.
+1. TEST-FIRST ANALYSIS (Critical):
+   - First, read and understand the FAILING TESTS listed at the bottom of this prompt
+   - Ask: "What does each failing test expect? What behavior should be correct?"
+   - Search for test files to understand the expected behavior
+   - Only then locate the relevant source code to modify
+
+2. ACTION OVER ANALYSIS:
+   - Your job is to WRITE A PATCH that fixes the bug, not to investigate how it was fixed historically
+   - Do NOT spend steps running `git log -S`, `git show <old-commit>`, or archaeology on past fixes
+   - If you have not edited any file by step 10, you are off-track — edit immediately
+
+3. WORKFLOW:
+   - (1) Read failing tests to understand expected behavior
+   - (2) `grep`/`sed -n` to locate relevant source code
+   - (3) READ 10-20 lines of context
+   - (4) EDIT the file directly with targeted fix
+   - (5) SUBMIT (run submit command when patch is ready)
+
+4. PATCH QUALITY:
+   - Prefer one targeted edit over multiple exploratory commands
+   - Verify your fix addresses the root cause, not just symptom
+   - Keep modifications minimal and focused
 
 """
 
@@ -105,6 +124,39 @@ def _wrap_query_with_step_logger(model: Any, agent_id: str, work_dir: Optional[P
 
     original_query = model.query
     step_counter = [0]
+
+    def _truncate_messages(messages, max_chars=80000):
+        """Truncate old messages to keep total under max_chars.
+
+        Targets ALL non-system messages (user/assistant/tool/observation),
+        not just tool results, because some frameworks store large tool
+        outputs as 'user' role messages. Keeps only the last 4 messages
+        intact for recent context.
+        """
+        if not messages:
+            return messages
+        total = sum(len(str(m.get('content', ''))) for m in messages)
+        if total <= max_chars:
+            return messages
+        keep_recent = 4
+        per_msg_cap = 3000
+        result = []
+        for i, msg in enumerate(messages):
+            role = msg.get('role')
+            content = str(msg.get('content', ''))
+            if role == 'system' or i >= len(messages) - keep_recent:
+                result.append(msg)
+            elif len(content) > per_msg_cap:
+                truncated = content[:1500] + f"\n... [truncated {len(content) - 3000} chars]\n" + content[-1500:]
+                new_msg = dict(msg)
+                new_msg['content'] = truncated
+                result.append(new_msg)
+            else:
+                result.append(msg)
+        truncated_total = sum(len(str(m.get('content', ''))) for m in result)
+        logger.info(f"Context truncated: {total} -> {truncated_total} chars ({len(messages)} msgs)")
+        return result
+
     # Token accumulators attached to the model so the runner can read them
     # after agent.run() completes.
     if not hasattr(model, 'total_input_tokens'):
@@ -131,17 +183,45 @@ def _wrap_query_with_step_logger(model: Any, agent_id: str, work_dir: Optional[P
                 parts.append(f"[tool_call {i}] {fn.get('name', '?')}({fn.get('arguments', '')})")
         return "\n\n".join(parts) if parts else "<empty>"
 
+    # Track whether agent has edited any file, for spin detection
+    has_edited = [False]
+    no_edit_streak = [0]
+    SPIN_THRESHOLD = 10  # Force submit after 10 consecutive steps with no file edit
+
     def logged_query(messages, **kwargs):
         step_counter[0] += 1
         step = step_counter[0]
         started = _time.time()
 
+        messages = _truncate_messages(messages)
         response = original_query(messages, **kwargs)
         duration = _time.time() - started
 
         # Strip empty tool_calls (DashScope rejects them in history)
         if isinstance(response, dict) and not response.get("tool_calls"):
             response.pop("tool_calls", None)
+
+        # Spin detection: check if this step edited a file
+        out_text_check = _fmt_response(response)
+        edited_this_step = bool(re.search(r'\b(sed|patch|cat\s*>|echo\s*>|tee|python.*write|submit)\b', out_text_check, re.IGNORECASE))
+        if edited_this_step:
+            has_edited[0] = True
+            no_edit_streak[0] = 0
+        else:
+            no_edit_streak[0] += 1
+
+        # Force submit if agent hasn't edited a file in SPIN_THRESHOLD consecutive steps
+        if not has_edited[0] and no_edit_streak[0] >= SPIN_THRESHOLD:
+            logger.warning(
+                f"Spin detected: {no_edit_streak[0]} steps without file edit, forcing submit"
+            )
+            # Inject a submit command into the response
+            if isinstance(response, dict):
+                actions = (response.get("extra") or {}).get("actions")
+                if actions is None:
+                    response.setdefault("extra", {})["actions"] = []
+                response["extra"]["actions"] = [{"command": "submit"}]
+            return response
 
         # Accumulate token usage from the response. litellm responses expose
         # usage as either a dict ("usage") or via the model's own counters.
@@ -229,7 +309,7 @@ CONFIG_ALIASES = {
 try:
     from minisweagent.agents.default import DefaultAgent, AgentConfig
     from minisweagent.environments.local import LocalEnvironment
-    from minisweagent.environments.docker import DockerEnvironment
+    from minisweagent.environments.docker import DockerEnvironment as _BaseDockerEnv
     from minisweagent import Model
     MINISWEAGENT_AVAILABLE = True
 except ImportError:
@@ -238,6 +318,55 @@ except ImportError:
     DefaultAgent = None
     AgentConfig = None
     LocalEnvironment = None
+    _BaseDockerEnv = None
+
+
+class ContainerDeadError(Exception):
+    """Raised when the Docker container has died and commands can no longer execute."""
+    pass
+
+
+if _BaseDockerEnv is not None:
+    class DockerEnvironment(_BaseDockerEnv):
+        """Extends base DockerEnvironment with owner label and container health check."""
+
+        def _start_container(self):
+            container_name = f"minisweagent-{uuid.uuid4().hex[:8]}"
+            cmd = [
+                self.config.executable,
+                "run",
+                "-d",
+                "--name",
+                container_name,
+                "--label",
+                "owner=evomas",
+                "--entrypoint=",
+                "-w",
+                self.config.cwd,
+                *self.config.run_args,
+                self.config.image,
+                "sleep",
+                self.config.container_timeout,
+            ]
+            self.logger.debug(f"Starting container with command: {shlex.join(cmd)}")
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.config.pull_timeout,
+                check=True,
+            )
+            self.logger.info(f"Started container {container_name} (owner=evomas) with ID {result.stdout.strip()}")
+            self.container_id = result.stdout.strip()
+
+        def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict:
+            output = super().execute(action, cwd, timeout=timeout)
+            if "No such container" in output.get("output", ""):
+                raise ContainerDeadError(
+                    f"Container {self.container_id} is dead. Aborting task to avoid infinite loop."
+                )
+            return output
+else:
     DockerEnvironment = None
 
 
@@ -380,6 +509,7 @@ class MinisweagentRunner(BaseAgentRunner):
         working_dir: Optional[Path] = None,
         config: str = "default",
         use_docker: bool = False,
+        network_isolated: bool = False,
         **kwargs
     ):
         """
@@ -391,6 +521,8 @@ class MinisweagentRunner(BaseAgentRunner):
             use_docker: If True, run agent inside per-instance SWE-bench docker
                 container (image: swebench/sweb.eval.x86_64.<repo>_<issue>:latest).
                 Requires instance_id in context at run() time.
+            network_isolated: If True, add --network none to Docker containers
+                to prevent the agent from accessing the internet.
         """
         if not MINISWEAGENT_AVAILABLE:
             logger.warning("mini-swe-agent not available, runner will fail")
@@ -398,6 +530,7 @@ class MinisweagentRunner(BaseAgentRunner):
         self.working_dir = working_dir or Path.cwd()
         self.config_name = config
         self.use_docker = use_docker
+        self.network_isolated = network_isolated
 
         # Load configuration
         try:
@@ -410,11 +543,14 @@ class MinisweagentRunner(BaseAgentRunner):
             self.agent_config = {}
             self.env_config = {}
 
-        # Default step_limit for SWE-bench tasks (prevents infinite loops).
-        # Kept low because the post-PASSED grace + framework-nudge safety net
-        # should submit within ~step_at_passed + 15; anything past that is spin.
-        if 'step_limit' not in self.agent_config or self.agent_config.get('step_limit') == 0:
-            self.agent_config['step_limit'] = 300
+        # Apply network isolation override from YAML execution config
+        if network_isolated:
+            self.env_config['network_isolated'] = True
+
+        # step_limit 250 (built-in swebench.yaml default).
+        # 断网环境下 agent 需要更多步探索代码库才能定位问题，
+        # 过低的 step_limit 会导致大量空 patch。
+        self.agent_config['step_limit'] = 250
         if 'cost_limit' not in self.agent_config or self.agent_config.get('cost_limit') == 0:
             self.agent_config['cost_limit'] = 10.0  # Default $10 budget
 
@@ -422,7 +558,7 @@ class MinisweagentRunner(BaseAgentRunner):
         logger.info(f"  step_limit: {self.agent_config.get('step_limit', 'default')}")
         logger.info(f"  cost_limit: {self.agent_config.get('cost_limit', 'default')}")
 
-    def create_agent(self, spec: AgentSpec, working_dir: Path, instance_id: str = None) -> Any:
+    def create_agent(self, spec: AgentSpec, working_dir: Path, instance_id: str = None, dockerhub_tag: str = None) -> Any:
         """Create a mini-swe-agent with configured settings.
 
         Args:
@@ -495,10 +631,20 @@ class MinisweagentRunner(BaseAgentRunner):
                     "use_docker=True requires instance_id in context to resolve "
                     "the per-instance docker image name"
                 )
-            # Docker tag naming convention from swebench: __ -> _1776_
-            iid_docker = instance_id.replace("__", "_1776_").lower()
-            image_name = f"swebench/sweb.eval.x86_64.{iid_docker}:latest"
+            # SWE-bench Pro: use dockerhub_tag from metadata if available
+            if dockerhub_tag:
+                image_name = f"jefzda/sweap-images:{dockerhub_tag}"
+            else:
+                # SWE-bench Verified: standard swebench naming (__ -> _1776_)
+                iid_docker = instance_id.replace("__", "_1776_").lower()
+                image_name = f"swebench/sweb.eval.x86_64.{iid_docker}:latest"
             logger.info(f"Using DockerEnvironment, image={image_name}")
+            # Build run_args: always include --rm; add --network none if configured
+            run_args = ["--rm"]
+            if self.env_config.get('network_isolated', False):
+                run_args += ["--network", "none"]
+                logger.info("Container network isolation enabled (--network none)")
+
             env = DockerEnvironment(
                 image=image_name,
                 cwd='/testbed',
@@ -509,6 +655,7 @@ class MinisweagentRunner(BaseAgentRunner):
                     "MSWEA_COST_TRACKING",
                 ],
                 container_timeout=self.env_config.get('container_timeout', '2h'),
+                run_args=run_args,
             )
         else:
             local_env_config = {
@@ -524,6 +671,13 @@ class MinisweagentRunner(BaseAgentRunner):
                     'format_error_template', 'timeout_template']:
             if key in agent_config and agent_config[key]:
                 agent_config[key] = agent_config[key].replace('/testbed', str(working_dir))
+
+        # Per-role step_limit: CEO/CTO only need a few steps for analysis,
+        # Programmer needs more for code exploration + editing + submission
+        role_step_limits = {'ceo': 5, 'cto': 5}
+        if spec.id in role_step_limits:
+            agent_config['step_limit'] = role_step_limits[spec.id]
+            logger.info(f"  Overriding step_limit for {spec.id}: {agent_config['step_limit']}")
 
         # Create agent
         agent = DefaultAgent(
@@ -615,6 +769,7 @@ class MinisweagentRunner(BaseAgentRunner):
     def run(self, spec: AgentSpec, task: str, context: Optional[Dict[str, Any]] = None) -> AgentResult:
         """Run mini-swe-agent with configured settings."""
         instance_id = context.get('instance_id') if context else None
+        dockerhub_tag = context.get('dockerhub_tag') if context else None
 
         # Extract repo path BEFORE extracting problem statement (which strips Repository: line)
         repo_path = self._extract_repo_path(task, instance_id)
@@ -630,7 +785,7 @@ class MinisweagentRunner(BaseAgentRunner):
             logger.info(f"Running mini-swe-agent in isolated dir: {work_dir}")
 
         try:
-            agent = self.create_agent(spec, work_dir, instance_id=instance_id)
+            agent = self.create_agent(spec, work_dir, instance_id=instance_id, dockerhub_tag=dockerhub_tag)
 
             # Enhance task with context
             enhanced_task = task

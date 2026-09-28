@@ -1,0 +1,26 @@
+diff --git a/django/db/migrations/autodetector.py b/django/db/migrations/autodetector.py
+index 30616c0172..5e6feb32bf 100644
+--- a/django/db/migrations/autodetector.py
++++ b/django/db/migrations/autodetector.py
+@@ -563,6 +563,21 @@ class MigrationAutodetector:
+                 if isinstance(base, str) and "." in base:
+                     base_app_label, base_name = base.split(".", 1)
+                     dependencies.append((base_app_label, base_name, None, True))
++                    # Depend on the removal of base fields when the
++                    # new model may override a field from its base.
++                    old_base_model_state = self.from_state.models.get(
++                        (base_app_label, base_name.lower()),
++                    )
++                    if old_base_model_state is not None:
++                        new_base_model_state = self.to_state.models.get(
++                            (base_app_label, base_name.lower()),
++                        )
++                        if new_base_model_state is not None:
++                            for field_name in old_base_model_state.fields:
++                                if field_name not in new_base_model_state.fields:
++                                    dependencies.append((
++                                        base_app_label, base_name, field_name, False
++                                    ))
+             # Depend on the other end of the primary key if it's a relation
+             if primary_key_rel:
+                 dependencies.append((

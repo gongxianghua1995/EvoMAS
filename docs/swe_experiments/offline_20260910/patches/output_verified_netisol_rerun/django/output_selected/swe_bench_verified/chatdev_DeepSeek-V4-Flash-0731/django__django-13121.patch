@@ -1,0 +1,68 @@
+diff --git a/django/db/backends/base/operations.py b/django/db/backends/base/operations.py
+index 2e283a3193..0e87efba2a 100644
+--- a/django/db/backends/base/operations.py
++++ b/django/db/backends/base/operations.py
+@@ -8,6 +8,7 @@ from django.conf import settings
+ from django.db import NotSupportedError, transaction
+ from django.db.backends import utils
+ from django.utils import timezone
++from django.utils.dateparse import parse_duration
+ from django.utils.encoding import force_str
+ 
+ 
+@@ -580,6 +581,8 @@ class BaseDatabaseOperations:
+ 
+     def convert_durationfield_value(self, value, expression, connection):
+         if value is not None:
++            if isinstance(value, str):
++                return parse_duration(value)
+             return datetime.timedelta(0, 0, value)
+ 
+     def check_expression_support(self, expression):
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+index a156c5e881..64c815b3f9 100644
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -9,6 +9,7 @@ from django.db.models import fields
+ from django.db.models.constants import LOOKUP_SEP
+ from django.db.models.query_utils import Q
+ from django.utils.deconstruct import deconstructible
++from django.utils.duration import duration_microseconds
+ from django.utils.functional import cached_property
+ from django.utils.hashable import make_hashable
+ 
+@@ -480,13 +481,27 @@ class CombinedExpression(SQLiteNumericMixin, Expression):
+ 
+ class DurationExpression(CombinedExpression):
+     def compile(self, side, compiler, connection):
+-        if not isinstance(side, DurationValue):
+-            try:
+-                output = side.output_field
+-            except FieldError:
+-                pass
+-            else:
+-                if output.get_internal_type() == 'DurationField':
++        other_side = self.rhs if side is self.lhs else self.lhs
++        try:
++            other_output = other_side.output_field
++        except FieldError:
++            other_output = None
++        other_is_duration = (
++            isinstance(other_side, DurationValue) or
++            (other_output is not None and other_output.get_internal_type() == 'DurationField')
++        )
++        if isinstance(side, DurationValue):
++            if other_is_duration:
++                # Duration-only expression: return plain microseconds.
++                return str(duration_microseconds(side.value)), []
++            return compiler.compile(side)
++        try:
++            output = side.output_field
++        except FieldError:
++            pass
++        else:
++            if output.get_internal_type() == 'DurationField':
++                if not other_is_duration:
+                     sql, params = compiler.compile(side)
+                     return connection.ops.format_for_duration_arithmetic(sql), params
+         return compiler.compile(side)

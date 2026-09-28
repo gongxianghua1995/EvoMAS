@@ -1,0 +1,73 @@
+diff --git a/sphinx/ext/autodoc/__init__.py b/sphinx/ext/autodoc/__init__.py
+index 1cecb1f79..b59ce72a0 100644
+--- a/sphinx/ext/autodoc/__init__.py
++++ b/sphinx/ext/autodoc/__init__.py
+@@ -2661,7 +2661,37 @@ class PropertyDocumenter(DocstringStripSignatureMixin, ClassLevelDocumenter):  #
+     @classmethod
+     def can_document_member(cls, member: Any, membername: str, isattr: bool, parent: Any
+                             ) -> bool:
+-        return inspect.isproperty(member) and isinstance(parent, ClassDocumenter)
++        if isinstance(parent, ClassDocumenter):
++            if inspect.isproperty(member):
++                return True
++            # Check if the parent's MRO has a classmethod wrapping a property
++            # (e.g., @classmethod @property decorator chain)
++            if isinstance(parent.object, type):
++                for cls in parent.object.__mro__:
++                    cls_member = cls.__dict__.get(membername)
++                    if cls_member is not None:
++                        if isinstance(cls_member, classmethod):
++                            return inspect.isproperty(cls_member.__func__)
++                        else:
++                            break
++        return False
++
++    def import_object(self, raiseerror: bool = False) -> bool:
++        ret = super().import_object(raiseerror)
++        if not ret:
++            return ret
++        # If the object is a classmethod wrapping a property, unwrap it
++        # to get the actual property object (e.g., @classmethod @property chain)
++        if isinstance(self.parent, type):
++            # Check the MRO to find the classmethod-wrapped property
++            for cls in self.parent.__mro__:
++                if self.object_name in getattr(cls, '__dict__', {}):
++                    cls_member = cls.__dict__[self.object_name]
++                    if (isinstance(cls_member, classmethod) and
++                            isinstance(cls_member.__func__, property)):
++                        self.object = cls_member.__func__
++                    break
++        return ret
+ 
+     def document_members(self, all_members: bool = False) -> None:
+         pass
+diff --git a/sphinx/ext/autodoc/importer.py b/sphinx/ext/autodoc/importer.py
+index 1a8ea0973..e00ea4095 100644
+--- a/sphinx/ext/autodoc/importer.py
++++ b/sphinx/ext/autodoc/importer.py
+@@ -281,8 +281,25 @@ def get_class_members(subject: Any, objpath: List[str], attrgetter: Callable
+             unmangled = unmangle(subject, name)
+             if unmangled and unmangled not in members:
+                 if name in obj_dict:
++                    # Check if the member is a classmethod wrapping a property
++                    # (e.g., @classmethod @property decorator chain)
++                    # In this case, the actual value returned by getattr() is the
++                    # result of the property getter, not the property itself.
++                    # We need to use the property object to properly document it.
++                    if (isinstance(obj_dict[name], classmethod) and
++                            isinstance(obj_dict[name].__func__, property)):
++                        value = obj_dict[name].__func__
+                     members[unmangled] = ObjectMember(unmangled, value, class_=subject)
+                 else:
++                    # Check if the member is inherited from a parent class
++                    # as a classmethod wrapping a property
++                    for cls in getmro(subject):
++                        if name in getattr(cls, '__dict__', {}):
++                            cls_member = cls.__dict__[name]
++                            if (isinstance(cls_member, classmethod) and
++                                    isinstance(cls_member.__func__, property)):
++                                value = cls_member.__func__
++                            break
+                     members[unmangled] = ObjectMember(unmangled, value)
+         except AttributeError:
+             continue

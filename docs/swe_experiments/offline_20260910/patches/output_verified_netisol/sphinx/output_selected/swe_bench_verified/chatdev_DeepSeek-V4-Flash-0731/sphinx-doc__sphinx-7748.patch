@@ -1,0 +1,25 @@
+diff --git a/sphinx/ext/autodoc/__init__.py b/sphinx/ext/autodoc/__init__.py
+index f8e4be999..030f2b42b 100644
+--- a/sphinx/ext/autodoc/__init__.py
++++ b/sphinx/ext/autodoc/__init__.py
+@@ -1064,9 +1064,18 @@ class DocstringSignatureMixin:
+                 continue
+             # re-prepare docstring to ignore more leading indentation
+             tab_width = self.directive.state.document.settings.tab_width  # type: ignore
+-            self._new_docstrings[i] = prepare_docstring('\n'.join(doclines[1:]),
+-                                                        tabsize=tab_width)
+             result = args, retann
++            sig_lines = [doclines[0]]
++            for line in doclines[1:]:
++                match = py_ext_sig_re.match(line)
++                if not match:
++                    break
++                _exmod, _path, _base, _args, _retann = match.groups()
++                if _base not in valid_names:
++                    break
++                sig_lines.append(line)
++            self._new_docstrings[i] = prepare_docstring('\n'.join(doclines[len(sig_lines):]),
++                                                        tabsize=tab_width)
+             # don't look any further
+             break
+         return result

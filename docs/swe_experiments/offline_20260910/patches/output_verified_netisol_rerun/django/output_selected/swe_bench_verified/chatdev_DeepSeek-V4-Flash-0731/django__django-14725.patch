@@ -1,0 +1,111 @@
+diff --git a/django/forms/formsets.py b/django/forms/formsets.py
+index 75b0646512..119969d270 100644
+--- a/django/forms/formsets.py
++++ b/django/forms/formsets.py
+@@ -352,6 +352,11 @@ class BaseFormSet(RenderableFormMixin):
+         ])
+         return forms_valid and not self.non_form_errors()
+ 
++    def _max_num_exceeded(self):
++        return (self.validate_max and
++                self.total_form_count() - len(self.deleted_forms) > self.max_num) or \
++                self.management_form.cleaned_data[TOTAL_FORM_COUNT] > self.absolute_max
++
+     def full_clean(self):
+         """
+         Clean all of self.data and populate self._errors and
+@@ -388,9 +393,7 @@ class BaseFormSet(RenderableFormMixin):
+                 continue
+             self._errors.append(form_errors)
+         try:
+-            if (self.validate_max and
+-                    self.total_form_count() - len(self.deleted_forms) > self.max_num) or \
+-                    self.management_form.cleaned_data[TOTAL_FORM_COUNT] > self.absolute_max:
++            if self._max_num_exceeded():
+                 raise ValidationError(ngettext(
+                     "Please submit at most %d form.",
+                     "Please submit at most %d forms.", self.max_num) % self.max_num,
+diff --git a/django/forms/models.py b/django/forms/models.py
+index 7effb202e3..acbcd0c295 100644
+--- a/django/forms/models.py
++++ b/django/forms/models.py
+@@ -9,7 +9,7 @@ from django.core.exceptions import (
+ )
+ from django.forms.fields import ChoiceField, Field
+ from django.forms.forms import BaseForm, DeclarativeFieldsMetaclass
+-from django.forms.formsets import BaseFormSet, formset_factory
++from django.forms.formsets import BaseFormSet, TOTAL_FORM_COUNT, formset_factory
+ from django.forms.utils import ErrorList
+ from django.forms.widgets import (
+     HiddenInput, MultipleHiddenInput, RadioSelect, SelectMultiple,
+@@ -598,28 +598,33 @@ class BaseModelFormSet(BaseFormSet):
+             field = field.remote_field.get_related_field()
+         return field.to_python
+ 
++    def _max_num_exceeded(self):
++        return (self.validate_max and
++                self.total_form_count() - self.initial_form_count() - len(self.deleted_forms) > self.max_num) or \
++                self.management_form.cleaned_data[TOTAL_FORM_COUNT] > self.absolute_max
++
+     def _construct_form(self, i, **kwargs):
+         pk_required = i < self.initial_form_count()
+-        if pk_required:
+-            if self.is_bound:
+-                pk_key = '%s-%s' % (self.add_prefix(i), self.model._meta.pk.name)
++        if self.is_bound and not getattr(self, 'save_as_new', False):
++            pk_key = '%s-%s' % (self.add_prefix(i), self.model._meta.pk.name)
++            try:
++                pk = self.data[pk_key]
++            except KeyError:
++                # The primary key is missing. The user may have tampered
++                # with POST data.
++                pass
++            else:
++                to_python = self._get_to_python(self.model._meta.pk)
+                 try:
+-                    pk = self.data[pk_key]
+-                except KeyError:
+-                    # The primary key is missing. The user may have tampered
+-                    # with POST data.
++                    pk = to_python(pk)
++                except ValidationError:
++                    # The primary key exists but is an invalid value. The
++                    # user may have tampered with POST data.
+                     pass
+                 else:
+-                    to_python = self._get_to_python(self.model._meta.pk)
+-                    try:
+-                        pk = to_python(pk)
+-                    except ValidationError:
+-                        # The primary key exists but is an invalid value. The
+-                        # user may have tampered with POST data.
+-                        pass
+-                    else:
+-                        kwargs['instance'] = self._existing_object(pk)
+-            else:
++                    kwargs['instance'] = self._existing_object(pk)
++        if pk_required:
++            if not self.is_bound:
+                 kwargs['instance'] = self.get_queryset()[i]
+         elif self.initial_extra:
+             # Set initial values for extra forms
+@@ -820,6 +825,19 @@ class BaseModelFormSet(BaseFormSet):
+             # object.
+             if self.can_delete and self._should_delete_form(form):
+                 continue
++            # The form refers to an existing object that was submitted as an
++            # extra form (e.g. the user tampered with the management form's
++            # INITIAL_FORMS value). Save it as an existing object rather than
++            # creating a duplicate, unless save_as_new is set.
++            if not getattr(self, 'save_as_new', False) and form.instance.pk is not None:
++                existing_object = self._existing_object(form.instance.pk)
++                if existing_object is not None:
++                    self.changed_objects.append((existing_object, form.changed_data))
++                    saved_instance = self.save_existing(form, existing_object, commit=commit)
++                    self.new_objects.append(saved_instance)
++                    if not commit:
++                        self.saved_forms.append(form)
++                    continue
+             self.new_objects.append(self.save_new(form, commit=commit))
+             if not commit:
+                 self.saved_forms.append(form)

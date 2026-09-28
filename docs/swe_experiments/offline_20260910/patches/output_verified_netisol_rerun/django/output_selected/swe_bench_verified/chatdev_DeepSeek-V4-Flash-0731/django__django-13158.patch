@@ -1,0 +1,13 @@
+diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py
+index 686e75c979..cd826de401 100755
+--- a/django/db/models/sql/compiler.py
++++ b/django/db/models/sql/compiler.py
+@@ -436,6 +436,8 @@ class SQLCompiler:
+             query.get_compiler(self.using, self.connection)
+             for query in self.query.combined_queries if not query.is_empty()
+         ]
++        if self.query.is_empty():
++            raise EmptyResultSet
+         if not features.supports_slicing_ordering_in_compound:
+             for query, compiler in zip(self.query.combined_queries, compilers):
+                 if query.low_mark or query.high_mark:

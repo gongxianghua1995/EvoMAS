@@ -1,0 +1,24 @@
+diff --git a/sphinx/cmd/quickstart.py b/sphinx/cmd/quickstart.py
+index a40a21073..e36550879 100644
+--- a/sphinx/cmd/quickstart.py
++++ b/sphinx/cmd/quickstart.py
+@@ -215,17 +215,13 @@ def ask_user(d: Dict) -> None:
+         print(__('Enter the root path for documentation.'))
+         d['path'] = do_prompt(__('Root path for the documentation'), '.', is_path)
+ 
+-    while path.isfile(path.join(d['path'], 'conf.py')) or \
++    if path.isfile(path.join(d['path'], 'conf.py')) or \
+             path.isfile(path.join(d['path'], 'source', 'conf.py')):
+         print()
+         print(bold(__('Error: an existing conf.py has been found in the '
+                       'selected root path.')))
+         print(__('sphinx-quickstart will not overwrite existing Sphinx projects.'))
+-        print()
+-        d['path'] = do_prompt(__('Please enter a new root path (or just Enter to exit)'),
+-                              '', is_path)
+-        if not d['path']:
+-            sys.exit(1)
++        sys.exit(1)
+ 
+     if 'sep' not in d:
+         print()

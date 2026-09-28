@@ -1,0 +1,52 @@
+[
+  {
+    "instance_id": "sphinx-doc__sphinx-9229",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9258",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9281",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9320",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9367",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9461",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9591",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9602",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9658",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9698",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  }
+]

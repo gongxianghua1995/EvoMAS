@@ -1,0 +1,95 @@
+diff --git a/lib/matplotlib/figure.py b/lib/matplotlib/figure.py
+index dab2bc4a5a..d9e774e433 100644
+--- a/lib/matplotlib/figure.py
++++ b/lib/matplotlib/figure.py
+@@ -1584,7 +1584,8 @@ default: %(va)s
+         gs = GridSpec(nrows=nrows, ncols=ncols, figure=self,
+                       wspace=wspace, hspace=hspace,
+                       width_ratios=width_ratios,
+-                      height_ratios=height_ratios)
++                      height_ratios=height_ratios,
++                      subfig_wspace=wspace, subfig_hspace=hspace)
+ 
+         sfarr = np.empty((nrows, ncols), dtype=object)
+         for i in range(ncols):
+@@ -2276,15 +2277,38 @@ class SubFigure(FigureBase):
+         gs = self._subplotspec.get_gridspec()
+         wr = np.asarray(gs.get_width_ratios())
+         hr = np.asarray(gs.get_height_ratios())
+-        dx = wr[self._subplotspec.colspan].sum() / wr.sum()
+-        dy = hr[self._subplotspec.rowspan].sum() / hr.sum()
+-        x0 = wr[:self._subplotspec.colspan.start].sum() / wr.sum()
+-        y0 = 1 - hr[:self._subplotspec.rowspan.stop].sum() / hr.sum()
++        # wspace/hspace are stored in the GridSpec by `Figure.subfigures`.
++        # Subfigures otherwise ignore the gridspec's wspace/hspace, which are
++        # meant for subplots sharing the same gridspec.
++        wspace = getattr(gs, "subfig_wspace", None) or 0
++        hspace = getattr(gs, "subfig_hspace", None) or 0
++        nrows, ncols = gs.get_geometry()
++        # Compute the cell positions spanning [0, 1] in both directions, with
++        # the subfigure-specific spacing between cells (see
++        # GridSpecBase.get_grid_positions for the analogous subplot logic).
++        cell_w = 1 / (ncols + wspace * (ncols - 1))
++        sep_w = wspace * cell_w
++        norm = cell_w * ncols / wr.sum()
++        cell_widths = [r * norm for r in wr]
++        sep_widths = [0] + ([sep_w] * (ncols - 1))
++        cell_ws = np.cumsum(np.column_stack([sep_widths, cell_widths]).flat)
++
++        cell_h = 1 / (nrows + hspace * (nrows - 1))
++        sep_h = hspace * cell_h
++        norm = cell_h * nrows / hr.sum()
++        cell_heights = [r * norm for r in hr]
++        sep_heights = [0] + ([sep_h] * (nrows - 1))
++        cell_hs = np.cumsum(np.column_stack([sep_heights, cell_heights]).flat)
++
++        x0 = cell_ws[2 * self._subplotspec.colspan.start]
++        x1 = cell_ws[2 * self._subplotspec.colspan.stop - 1]
++        y0 = 1 - cell_hs[2 * self._subplotspec.rowspan.stop - 1]
++        y1 = 1 - cell_hs[2 * self._subplotspec.rowspan.start]
+         if self.bbox_relative is None:
+-            self.bbox_relative = Bbox.from_bounds(x0, y0, dx, dy)
++            self.bbox_relative = Bbox.from_bounds(x0, y0, x1 - x0, y1 - y0)
+         else:
+             self.bbox_relative.p0 = (x0, y0)
+-            self.bbox_relative.p1 = (x0 + dx, y0 + dy)
++            self.bbox_relative.p1 = (x1, y1)
+ 
+     def get_constrained_layout(self):
+         """
+diff --git a/lib/matplotlib/gridspec.py b/lib/matplotlib/gridspec.py
+index c86a527ef5..006efa7f80 100644
+--- a/lib/matplotlib/gridspec.py
++++ b/lib/matplotlib/gridspec.py
+@@ -328,7 +328,8 @@ class GridSpec(GridSpecBase):
+     def __init__(self, nrows, ncols, figure=None,
+                  left=None, bottom=None, right=None, top=None,
+                  wspace=None, hspace=None,
+-                 width_ratios=None, height_ratios=None):
++                 width_ratios=None, height_ratios=None,
++                 subfig_wspace=None, subfig_hspace=None):
+         """
+         Parameters
+         ----------
+@@ -366,6 +367,12 @@ class GridSpec(GridSpecBase):
+             relative height of ``height_ratios[i] / sum(height_ratios)``.
+             If not given, all rows will have the same height.
+ 
++        subfig_wspace, subfig_hspace : float, optional
++            The amount of width/height reserved for space between subfigures,
++            expressed as a fraction of the average subfigure width/height.
++            These are only used by `.SubFigure` positioning and are set by
++            `.Figure.subfigures`.
++
+         """
+         self.left = left
+         self.bottom = bottom
+@@ -373,6 +380,8 @@ class GridSpec(GridSpecBase):
+         self.top = top
+         self.wspace = wspace
+         self.hspace = hspace
++        self.subfig_wspace = subfig_wspace
++        self.subfig_hspace = subfig_hspace
+         self.figure = figure
+ 
+         super().__init__(nrows, ncols,

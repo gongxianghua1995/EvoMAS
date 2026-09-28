@@ -1,0 +1,297 @@
+[
+  {
+    "instance_id": "django__django-10999",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11087",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11138",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11141",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11149",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11206",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11239",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11265",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11292",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11400",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11477",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11490",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11532",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11555",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11734",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11820",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11848",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11885",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-11964",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-12039",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-12125",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "django__django-12209",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-12273",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-12325",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-12406",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-12663",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-12708",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-12754",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13012",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13023",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13112",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13121",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13128",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13158",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13297",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13315",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13344",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13449",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13568",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13590",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13794",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13807",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13810",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13821",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-13925",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-14007",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-14011",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-14017",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-14034",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-14053",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-14122",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-14155",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-14170",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-14351",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-14434",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-14500",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-14539",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-14725",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "django__django-14771",
+    "resolved": "NO",
+    "error": "empty_patch"
+  }
+]

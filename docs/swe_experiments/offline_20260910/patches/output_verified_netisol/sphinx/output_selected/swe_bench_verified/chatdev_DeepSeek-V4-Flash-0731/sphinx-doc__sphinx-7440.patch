@@ -1,0 +1,54 @@
+diff --git a/sphinx/domains/std.py b/sphinx/domains/std.py
+index d820cfe5c..d2dd8666e 100644
+--- a/sphinx/domains/std.py
++++ b/sphinx/domains/std.py
+@@ -305,7 +305,7 @@ def make_glossary_term(env: "BuildEnvironment", textnodes: Iterable[Node], index
+         term['ids'].append(node_id)
+ 
+     std = cast(StandardDomain, env.get_domain('std'))
+-    std.note_object('term', termtext.lower(), node_id, location=term)
++    std.note_object('term', termtext, node_id, location=term)
+ 
+     # add an index entry too
+     indexnode = addnodes.index()
+@@ -658,6 +658,18 @@ class StandardDomain(Domain):
+                            objtype, name, docname, location=location)
+         self.objects[objtype, name] = (self.env.docname, labelid)
+ 
++    def _find_obj(self, objtypes: List[str], target: str
++                  ) -> Tuple[str, str]:
++        """Find a cross reference object with case-insensitive matching.
++
++        .. versionadded:: 3.0
++        """
++        for objtype in objtypes:
++            for name, (docname, labelid) in self.objects.items():
++                if objtype == name[0] and name[1].lower() == target.lower():
++                    return docname, labelid
++        return '', ''
++
+     def add_object(self, objtype: str, name: str, docname: str, labelid: str) -> None:
+         warnings.warn('StandardDomain.add_object() is deprecated.',
+                       RemovedInSphinx50Warning)
+@@ -933,6 +945,9 @@ class StandardDomain(Domain):
+                 break
+         else:
+             docname, labelid = '', ''
++        if not docname:
++            if typ == 'term':
++                docname, labelid = self._find_obj(objtypes, target)
+         if not docname:
+             return None
+         return make_refnode(builder, fromdocname, docname,
+@@ -956,6 +971,11 @@ class StandardDomain(Domain):
+                 key = (objtype, ltarget)
+             if key in self.objects:
+                 docname, labelid = self.objects[key]
++            elif objtype == 'term':
++                docname, labelid = self._find_obj([objtype], target)
++            else:
++                docname, labelid = '', ''
++            if docname:
+                 results.append(('std:' + self.role_for_objtype(objtype),
+                                 make_refnode(builder, fromdocname, docname,
+                                              labelid, contnode)))

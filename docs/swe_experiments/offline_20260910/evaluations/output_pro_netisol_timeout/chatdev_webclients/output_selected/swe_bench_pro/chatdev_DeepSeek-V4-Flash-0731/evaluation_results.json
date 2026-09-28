@@ -1,0 +1,12 @@
+[
+  {
+    "instance_id": "instance_protonmail__webclients-09fcf0dbdb87fa4f4a27700800ee4a3caed8b413",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: '/home/xhgong/project/EvoMAS/dataset/swe_bench_pro/setup_map.json'"
+  },
+  {
+    "instance_id": "instance_protonmail__webclients-2dce79ea4451ad88d6bfe94da22e7f2f988efa60",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: '/home/xhgong/project/EvoMAS/dataset/swe_bench_pro/setup_map.json'"
+  }
+]

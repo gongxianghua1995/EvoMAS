@@ -1,0 +1,18 @@
+diff --git a/lib/matplotlib/dates.py b/lib/matplotlib/dates.py
+index 4d8ddf3ee5..2600d04ac7 100644
+--- a/lib/matplotlib/dates.py
++++ b/lib/matplotlib/dates.py
+@@ -797,7 +797,12 @@ class ConciseDateFormatter(ticker.Formatter):
+         # 3: hours, 4: minutes, 5: seconds, 6: microseconds
+         for level in range(5, -1, -1):
+             if len(np.unique(tickdate[:, level])) > 1:
+-                if level < 2:
++                if level == 0:
++                    show_offset = False
++                elif level == 1 and 1 in tickdate[:, 1]:
++                    # If there is a January tick, the year is shown in the tick
++                    # label (via zero_formats[1] = '%Y').  Otherwise, the year
++                    # is only shown in the offset.
+                     show_offset = False
+                 break
+             elif level == 0:

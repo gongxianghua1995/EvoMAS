@@ -1,0 +1,16 @@
+{
+  "note": "Large local benchmark inputs retained on disk; not committed. Restore SWE-bench Pro inputs with these exact checksums for reproduction. Split IDs are committed separately.",
+  "directory": "dataset/swe_bench_pro",
+  "files": {
+    "tasks_map.json": {
+      "sha256": "1554ec44fb91017db3c75e9a1719edccd63f026870093eacb9a84e8b0f2d6590",
+      "bytes": 11276381,
+      "records": 731
+    },
+    "test.json": {
+      "sha256": "0180d5548216f8fbd91eea60368624eeee9147f89af334cce21ea931cdb6c58e",
+      "bytes": 22682434,
+      "records": 731
+    }
+  }
+}

@@ -1,0 +1,87 @@
+diff --git a/sphinx/ext/autodoc/__init__.py b/sphinx/ext/autodoc/__init__.py
+index ddfd2b365..980768d84 100644
+--- a/sphinx/ext/autodoc/__init__.py
++++ b/sphinx/ext/autodoc/__init__.py
+@@ -584,6 +584,40 @@ class Documenter:
+         else:
+             return 'docstring of %s' % fullname
+ 
++    def _find_attr_docs(self, namespace: str, name: str,
++                        attr_docs: Dict[Tuple[str, str], List[str]]) -> Optional[List[str]]:
++        """Find attr docstring for *name* in the namespace and its base classes."""
++        key = (namespace, name)
++        if key in attr_docs:
++            return attr_docs[key]
++
++        # Check base classes if the namespace is a class
++        if not (name.startswith('__') and not name.endswith('__')):
++            # name-mangled private attributes are not inherited
++            parents = []
++            if inspect.isclass(self.parent):
++                parents = [self.parent]
++            elif inspect.isclass(self.object):
++                parents = [self.object]
++
++            for cls in parents:
++                for parent_cls in inspect.getmro(cls):
++                    key = (parent_cls.__qualname__, name)
++                    if key in attr_docs:
++                        return attr_docs[key]
++
++                    # Also check the analyzer for the parent class's module
++                    if parent_cls.__module__ != self.modname:
++                        try:
++                            analyzer = ModuleAnalyzer.for_module(parent_cls.__module__)
++                            analyzer.analyze()
++                            if key in analyzer.attr_docs:
++                                return analyzer.attr_docs[key]
++                        except PycodeError:
++                            pass
++
++        return None
++
+     def add_content(self, more_content: Optional[StringList], no_docstring: bool = False
+                     ) -> None:
+         """Add content from docstrings, attribute documentation and user."""
+@@ -598,11 +632,12 @@ class Documenter:
+             attr_docs = self.analyzer.find_attr_docs()
+             if self.objpath:
+                 key = ('.'.join(self.objpath[:-1]), self.objpath[-1])
+-                if key in attr_docs:
++                docstrings = self._find_attr_docs(key[0], key[1], attr_docs)
++                if docstrings:
+                     no_docstring = True
+                     # make a copy of docstring for attributes to avoid cache
+                     # the change of autodoc-process-docstring event.
+-                    docstrings = [list(attr_docs[key])]
++                    docstrings = [list(docstrings)]
+ 
+                     for i, line in enumerate(self.process_doc(docstrings)):
+                         self.add_line(line, sourcename, i)
+@@ -746,7 +781,7 @@ class Documenter:
+                         keep = has_doc or self.options.undoc_members
+                 else:
+                     keep = False
+-            elif (namespace, membername) in attr_docs:
++            elif self._find_attr_docs(namespace, membername, attr_docs) is not None:
+                 if want_all and isprivate:
+                     if self.options.private_members is None:
+                         keep = False
+diff --git a/sphinx/ext/autodoc/importer.py b/sphinx/ext/autodoc/importer.py
+index d6e73d36a..66623a18e 100644
+--- a/sphinx/ext/autodoc/importer.py
++++ b/sphinx/ext/autodoc/importer.py
+@@ -314,6 +314,14 @@ def get_class_members(subject: Any, objpath: List[str], attrgetter: Callable,
+             if namespace == ns and name not in members:
+                 members[name] = ClassAttribute(subject, name, INSTANCEATTR,
+                                                '\n'.join(docstring))
++            elif (name not in members and isclass(subject) and
++                      not (name.startswith('__') and not name.endswith('__'))):
++                # inherited instance attributes (except name-mangled private)
++                for cls in getmro(subject):
++                    if cls.__qualname__ == ns and name not in members:
++                        members[name] = ClassAttribute(subject, name, INSTANCEATTR,
++                                                       '\n'.join(docstring))
++                        break
+ 
+     return members

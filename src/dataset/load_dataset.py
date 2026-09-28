@@ -54,12 +54,15 @@ class Dataset:
                 'swebench': 'swe_bench',
                 'swebench_lite': 'swe_bench_lite',
                 'swebench_verified': 'swe_bench_verified',
+                'swebench_pro': 'swe_bench_pro',
                 'swe-bench': 'swe_bench',
                 'swe-bench-lite': 'swe_bench_lite',
                 'swe-bench-verified': 'swe_bench_verified',
+                'swe-bench-pro': 'swe_bench_pro',
                 'swe_bench': 'swe_bench',
                 'swe_bench_lite': 'swe_bench_lite',
-                'swe_bench_verified': 'swe_bench_verified'
+                'swe_bench_verified': 'swe_bench_verified',
+                'swe_bench_pro': 'swe_bench_pro'
             }
 
             swe_dir = swe_bench_mappings.get(self.dataset_name, self.dataset_name)

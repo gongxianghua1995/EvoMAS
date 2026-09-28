@@ -1,0 +1,51 @@
+diff --git a/lib/matplotlib/offsetbox.py b/lib/matplotlib/offsetbox.py
+index 1dee8a23d9..e0fbc8d832 100755
+--- a/lib/matplotlib/offsetbox.py
++++ b/lib/matplotlib/offsetbox.py
+@@ -1505,15 +1505,42 @@ class DraggableBase:
+         if not ref_artist.pickable():
+             ref_artist.set_picker(True)
+         self.got_artist = False
+-        self.canvas = self.ref_artist.figure.canvas
+-        self._use_blit = use_blit and self.canvas.supports_blit
++        self._canvas = self.ref_artist.figure.canvas
++        self._use_blit = use_blit and self._canvas.supports_blit
+         self.cids = [
+-            self.canvas.callbacks._connect_picklable(
++            self._canvas.callbacks._connect_picklable(
+                 'pick_event', self.on_pick),
+-            self.canvas.callbacks._connect_picklable(
++            self._canvas.callbacks._connect_picklable(
+                 'button_release_event', self.on_release),
+         ]
+ 
++    @property
++    def canvas(self):
++        if self._canvas is None:
++            self._canvas = self.ref_artist.figure.canvas
++            self._use_blit = self._use_blit and self._canvas.supports_blit
++        return self._canvas
++
++    @canvas.setter
++    def canvas(self, canvas):
++        self._canvas = canvas
++
++    def __getstate__(self):
++        d = self.__dict__.copy()
++        # The canvas cannot currently be pickled.  Drop it from the state, as
++        # well as the transient state used while dragging.
++        d.pop("_canvas", None)
++        d.pop("_c1", None)
++        d.pop("background", None)
++        d.pop("mouse_x", None)
++        d.pop("mouse_y", None)
++        d["got_artist"] = False
++        return d
++
++    def __setstate__(self, state):
++        self.__dict__ = state
++        self._canvas = None
++
+     def on_motion(self, evt):
+         if self._check_still_parented() and self.got_artist:
+             dx = evt.x - self.mouse_x

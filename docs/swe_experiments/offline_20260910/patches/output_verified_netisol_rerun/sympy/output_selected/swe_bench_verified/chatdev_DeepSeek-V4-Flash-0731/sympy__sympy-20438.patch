@@ -1,0 +1,28 @@
+diff --git a/sympy/core/relational.py b/sympy/core/relational.py
+index e2e0b7fbcc..eddb480c87 100644
+--- a/sympy/core/relational.py
++++ b/sympy/core/relational.py
+@@ -311,7 +311,7 @@ def _eval_simplify(self, **kwargs):
+             v = None
+             if dif.is_comparable:
+                 v = dif.n(2)
+-            elif dif.equals(0):  # XXX this is expensive
++            elif hasattr(dif, 'equals') and dif.equals(0):  # XXX this is expensive
+                 v = S.Zero
+             if v is not None:
+                 r = r.func._eval_relation(v, S.Zero)
+diff --git a/sympy/sets/sets.py b/sympy/sets/sets.py
+index 3c4aa86e36..374279e10c 100644
+--- a/sympy/sets/sets.py
++++ b/sympy/sets/sets.py
+@@ -852,6 +852,10 @@ def is_finite_set(self):
+         all_finite = fuzzy_and(s.is_finite_set for s in self.sets)
+         return fuzzy_or([self.is_empty, all_finite])
+ 
++    def _eval_is_subset(self, other):
++        if self.is_finite_set:
++            return fuzzy_and(other._contains(Tuple(*e)) for e in self)
++
+     @property
+     def _measure(self):
+         measure = 1

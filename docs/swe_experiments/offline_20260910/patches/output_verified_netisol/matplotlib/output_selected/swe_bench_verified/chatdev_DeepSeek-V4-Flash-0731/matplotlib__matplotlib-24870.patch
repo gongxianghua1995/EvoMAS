@@ -1,0 +1,27 @@
+diff --git a/lib/matplotlib/contour.py b/lib/matplotlib/contour.py
+index 144eadeae2..85a6611fa4 100644
+--- a/lib/matplotlib/contour.py
++++ b/lib/matplotlib/contour.py
+@@ -1446,6 +1446,10 @@ class QuadContourSet(ContourSet):
+         else:
+             fn = 'contour'
+         nargs = len(args)
++        # The z data is the first argument when only z is given, or the third
++        # argument when x, y and z are given.  Capture it before it is
++        # converted to float64 below so that boolean inputs can be detected.
++        z_orig = args[2] if nargs > 2 else args[0]
+         if nargs <= 2:
+             z = ma.asarray(args[0], dtype=np.float64)
+             x, y = self._initialize_x_y(z)
+@@ -1462,6 +1466,12 @@ class QuadContourSet(ContourSet):
+             z = ma.masked_where(z <= 0, z)
+             _api.warn_external('Log scale: values of z <= 0 have been masked')
+             self.zmin = float(z.min())
++        # If the input data is boolean (e.g. a mask), auto-select levels to
++        # give a single contour line at 0.5 (or filled contours bounded at
++        # 0 and 1).
++        if (self.levels is None and len(args) == 0
++                and np.asarray(z_orig).dtype == bool):
++            self.levels = [0.5] if not self.filled else [0, 0.5, 1]
+         self._process_contour_level_args(args)
+         return (x, y, z)

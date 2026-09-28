@@ -1,0 +1,197 @@
+[
+  {
+    "instance_id": "sympy__sympy-12489",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-13031",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-13615",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-13757",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-13798",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-13852",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-13877",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-13878",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-13974",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-14248",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-14711",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-15349",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-15599",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-15809",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-16450",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-16597",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-16792",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sympy__sympy-17139",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-17318",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-17630",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-17655",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-18199",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-18698",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-18763",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-19040",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-19346",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-19495",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-19637",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-19783",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-20154",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-20438",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-20590",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-20801",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-21847",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-21930",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-22080",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-22456",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-23534",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sympy__sympy-24443",
+    "resolved": "NO",
+    "error": "empty_patch"
+  }
+]

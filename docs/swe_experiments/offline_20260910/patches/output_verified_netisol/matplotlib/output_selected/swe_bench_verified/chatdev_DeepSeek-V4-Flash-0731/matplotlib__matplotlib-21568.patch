@@ -1,0 +1,15 @@
+diff --git a/lib/matplotlib/dates.py b/lib/matplotlib/dates.py
+index 0766156d64..67125982e6 100644
+--- a/lib/matplotlib/dates.py
++++ b/lib/matplotlib/dates.py
+@@ -595,8 +595,9 @@ def _wrap_in_tex(text):
+     p = r'([a-zA-Z]+)'
+     ret_text = re.sub(p, r'}$\1$\\mathdefault{', text)
+ 
+-    # Braces ensure dashes are not spaced like binary operators.
+-    ret_text = '$\\mathdefault{'+ret_text.replace('-', '{-}')+'}$'
++    # Braces ensure dashes are not spaced like binary operators, and spaces
++    # need to be replaced with \; to keep the spacing in math mode.
++    ret_text = '$\\mathdefault{'+ret_text.replace('-', '{-}').replace(' ', r'\;')+'}$'
+     ret_text = ret_text.replace('$\\mathdefault{}$', '')
+     return ret_text

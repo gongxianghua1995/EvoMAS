@@ -1,0 +1,15 @@
+diff --git a/lib/matplotlib/figure.py b/lib/matplotlib/figure.py
+index c55864243a..f2296c47e4 100755
+--- a/lib/matplotlib/figure.py
++++ b/lib/matplotlib/figure.py
+@@ -3043,6 +3043,11 @@ class Figure(FigureBase):
+ 
+         self.__dict__ = state
+ 
++        # Reset the dpi to the original dpi, in case it was scaled for
++        # high-DPI displays (e.g., on a Mac with Retina display).
++        if hasattr(self, '_original_dpi'):
++            self._dpi = self._original_dpi
++
+         # re-initialise some of the unstored state information
+         FigureCanvasBase(self)  # Set self.canvas.

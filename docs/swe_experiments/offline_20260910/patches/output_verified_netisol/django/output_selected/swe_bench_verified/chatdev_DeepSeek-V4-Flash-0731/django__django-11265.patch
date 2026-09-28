@@ -1,0 +1,35 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+index d69c24419b..6909483715 100644
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -1666,6 +1666,7 @@ class Query(BaseExpression):
+             filter_expr = (filter_lhs, OuterRef(filter_rhs.name))
+         # Generate the inner query.
+         query = Query(self.model)
++        query._filtered_relations = self._filtered_relations.copy()
+         query.add_filter(filter_expr)
+         query.clear_ordering(True)
+         # Try to have as simple as possible subquery -> trim leading joins from
+@@ -2145,6 +2146,22 @@ class Query(BaseExpression):
+         if self.alias_map[lookup_tables[trimmed_paths + 1]].join_type != LOUTER:
+             select_fields = [r[0] for r in join_field.related_fields]
+             select_alias = lookup_tables[trimmed_paths + 1]
++            join = self.alias_map[select_alias]
++            if join.filtered_relation:
++                # Move the filtered relation condition from the join's ON
++                # clause to the WHERE clause since the join is being
++                # converted to a base table.
++                self.where.add(
++                    self.build_filtered_relation_q(
++                        join.filtered_relation.condition,
++                        reuse=set(join.filtered_relation.path),
++                    ),
++                    AND,
++                )
++                # build_filtered_relation_q() calls get_initial_alias()
++                # which increments the refcount of the base table. Unref
++                # it to allow the base table to be trimmed.
++                self.unref_alias(self.base_table)
+             self.unref_alias(lookup_tables[trimmed_paths])
+             extra_restriction = join_field.get_extra_restriction(
+                 self.where_class, None, lookup_tables[trimmed_paths + 1])

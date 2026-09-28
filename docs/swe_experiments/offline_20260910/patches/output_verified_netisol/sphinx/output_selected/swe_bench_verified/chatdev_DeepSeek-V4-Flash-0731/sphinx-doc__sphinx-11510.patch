@@ -1,0 +1,47 @@
+diff --git a/sphinx/directives/other.py b/sphinx/directives/other.py
+index 19f7c0a8d..9317704f9 100644
+--- a/sphinx/directives/other.py
++++ b/sphinx/directives/other.py
+@@ -1,6 +1,8 @@
+ from __future__ import annotations
+ 
++import os
+ import re
++import tempfile
+ from typing import TYPE_CHECKING, Any, cast
+ 
+ from docutils import nodes
+@@ -376,6 +378,35 @@ class Include(BaseInclude, SphinxDirective):
+         rel_filename, filename = self.env.relfn2path(self.arguments[0])
+         self.arguments[0] = filename
+         self.env.note_included(filename)
++
++        # emit "source-read" event for the included file
++        encoding = self.options.get(
++            'encoding', self.state.document.settings.input_encoding)
++        if encoding is None:
++            encoding = 'utf-8'
++        try:
++            with open(filename, encoding=encoding) as f:
++                content = f.read()
++        except (OSError, UnicodeError):
++            # docutils will report the error
++            return super().run()
++
++        arg = [content]
++        self.env.events.emit('source-read', rel_filename, arg)
++        if arg[0] != content:
++            # Content was modified by the event handler.
++            # Write it to a temporary file and include that instead.
++            with tempfile.NamedTemporaryFile(
++                mode='w', encoding=encoding, delete=False
++            ) as tmp:
++                tmp.write(arg[0])
++                tmp_path = tmp.name
++            self.arguments[0] = tmp_path
++            try:
++                return super().run()
++            finally:
++                os.unlink(tmp_path)
++
+         return super().run()

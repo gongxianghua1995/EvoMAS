@@ -1,0 +1,54 @@
+diff --git a/django/contrib/admin/options.py b/django/contrib/admin/options.py
+index 880a2cc17b..d22a9e919c 100644
+--- a/django/contrib/admin/options.py
++++ b/django/contrib/admin/options.py
+@@ -2115,8 +2115,14 @@ class InlineModelAdmin(BaseModelAdmin):
+         if self.opts.auto_created:
+             # We're checking the rights to an auto-created intermediate model,
+             # which doesn't have its own individual permissions. The user needs
+-            # to have the view permission for the related model in order to
+-            # be able to do anything with the intermediate model.
++            # to have the view permission on the related model in order to
++            # be able to do anything with the intermediate model. The user
++            # also needs add or change permission on the parent model in order
++            # to modify the M2M relationship.
++            opts = self.parent_model._meta
++            codename = get_permission_codename('add' if obj is None else 'change', opts)
++            if not request.user.has_perm("%s.%s" % (opts.app_label, codename)):
++                return False
+             return self.has_view_permission(request, obj)
+         return super().has_add_permission(request)
+ 
+@@ -2124,8 +2130,14 @@ class InlineModelAdmin(BaseModelAdmin):
+         if self.opts.auto_created:
+             # We're checking the rights to an auto-created intermediate model,
+             # which doesn't have its own individual permissions. The user needs
+-            # to have the view permission for the related model in order to
+-            # be able to do anything with the intermediate model.
++            # to have the view permission on the related model in order to
++            # be able to do anything with the intermediate model. The user
++            # also needs change permission on the parent model in order to
++            # modify the M2M relationship.
++            opts = self.parent_model._meta
++            codename = get_permission_codename('change', opts)
++            if not request.user.has_perm("%s.%s" % (opts.app_label, codename)):
++                return False
+             return self.has_view_permission(request, obj)
+         return super().has_change_permission(request)
+ 
+@@ -2133,8 +2145,14 @@ class InlineModelAdmin(BaseModelAdmin):
+         if self.opts.auto_created:
+             # We're checking the rights to an auto-created intermediate model,
+             # which doesn't have its own individual permissions. The user needs
+-            # to have the view permission for the related model in order to
+-            # be able to do anything with the intermediate model.
++            # to have the view permission on the related model in order to
++            # be able to do anything with the intermediate model. The user
++            # also needs change permission on the parent model in order to
++            # modify the M2M relationship.
++            opts = self.parent_model._meta
++            codename = get_permission_codename('change', opts)
++            if not request.user.has_perm("%s.%s" % (opts.app_label, codename)):
++                return False
+             return self.has_view_permission(request, obj)
+         return super().has_delete_permission(request, obj)

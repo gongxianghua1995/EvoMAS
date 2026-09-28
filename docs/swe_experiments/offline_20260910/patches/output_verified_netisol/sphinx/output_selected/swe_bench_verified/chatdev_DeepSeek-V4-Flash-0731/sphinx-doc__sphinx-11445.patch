@@ -1,0 +1,36 @@
+diff --git a/sphinx/util/rst.py b/sphinx/util/rst.py
+index 7a1538325..5921e8b1a 100755
+--- a/sphinx/util/rst.py
++++ b/sphinx/util/rst.py
+@@ -75,15 +75,27 @@ def default_role(docname: str, name: str) -> Generator[None, None, None]:
+     docutils.unregister_role('')
+ 
+ 
++def _is_section_underline(line: str) -> bool:
++    """Check if *line* is a section heading underline."""
++    if not line:
++        return False
++    char = line[0]
++    return char.isascii() and not char.isalnum() and all(c == char for c in line)
++
++
+ def prepend_prolog(content: StringList, prolog: str) -> None:
+     """Prepend a string to content body as prolog."""
+     if prolog:
+         pos = 0
+-        for line in content:
+-            if docinfo_re.match(line):
+-                pos += 1
+-            else:
++        while pos < len(content):
++            line = content[pos]
++            if not docinfo_re.match(line):
+                 break
++            # if the next line is a section heading underline,
++            # the current line is a heading with a role directive, not docinfo.
++            if pos + 1 < len(content) and _is_section_underline(content[pos + 1]):
++                break
++            pos += 1
+ 
+         if pos > 0:
+             # insert a blank line after docinfo

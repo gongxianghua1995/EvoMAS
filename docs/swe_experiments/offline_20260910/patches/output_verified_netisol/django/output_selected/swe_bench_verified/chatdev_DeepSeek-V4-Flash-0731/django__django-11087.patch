@@ -1,0 +1,32 @@
+diff --git a/django/db/models/deletion.py b/django/db/models/deletion.py
+index 3a462f1c4c..5944ff7574 100644
+--- a/django/db/models/deletion.py
++++ b/django/db/models/deletion.py
+@@ -232,9 +232,26 @@ class Collector:
+         """
+         Get a QuerySet of objects related to `objs` via the relation `related`.
+         """
+-        return related.related_model._base_manager.using(self.using).filter(
++        qs = related.related_model._base_manager.using(self.using).filter(
+             **{"%s__in" % related.field.name: objs}
+         )
++        # If there are no signal listeners for the related model, only fetch
++        # the fields required for deletion (the primary key and any parent
++        # links used for model inheritance).
++        if not self._has_signal_listeners(related.related_model):
++            fields = {related.related_model._meta.pk.name}
++            fields.update(
++                ptr.name for ptr in related.related_model._meta.parents.values() if ptr
++            )
++            qs = qs.only(*fields)
++        return qs
++
++    def _has_signal_listeners(self, model):
++        return (
++            signals.pre_delete.has_listeners(model) or
++            signals.post_delete.has_listeners(model) or
++            signals.m2m_changed.has_listeners(model)
++        )
+ 
+     def instances_with_model(self):
+         for model, instances in self.data.items():

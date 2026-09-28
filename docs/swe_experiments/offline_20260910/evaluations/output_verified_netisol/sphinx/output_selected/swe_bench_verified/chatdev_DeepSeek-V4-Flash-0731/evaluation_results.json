@@ -1,0 +1,167 @@
+[
+  {
+    "instance_id": "sphinx-doc__sphinx-10466",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-10614",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-10673",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-11445",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-11510",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-7440",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-7590",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-7748",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-7889",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-7985",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8035",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8056",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8120",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8265",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8269",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8459",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8475",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8548",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8551",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8595",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8621",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8638",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8721",
+    "resolved": "NO",
+    "error": "[Errno 2] No such file or directory: 'conda'"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9229",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9258",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9281",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9320",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9367",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9461",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9591",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9602",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9658",
+    "resolved": "NO",
+    "error": "empty_patch"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-9698",
+    "resolved": "NO",
+    "error": "empty_patch"
+  }
+]
