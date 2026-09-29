@@ -235,6 +235,7 @@ def _run_baseline(
     repo_filter: Optional[str] = None,
     evaluate_on_save: bool = False,
     task_timeout: Optional[float] = None,
+    generate_only: bool = False,
 ) -> Dict[str, Any]:
     """Evaluate one pool configuration directly, skipping all meta-model evolution.
 
@@ -360,7 +361,7 @@ def _run_baseline(
         output_dir=output_dir,
         verbose=True,
         llm_as_judge=llm_as_judge,
-        evaluate_on_save=evaluate_on_save,
+        evaluate_on_save=evaluate_on_save and not generate_only,
         **({"task_timeout": task_timeout} if task_timeout is not None else {}),
     )
 
@@ -368,7 +369,7 @@ def _run_baseline(
     output_location = result.get("output_location", f"{output_dir}/{dataset_name}/")
 
     # Skip batch evaluation if evaluate_on_save=True (each task was already evaluated per-task)
-    if evaluate_on_save:
+    if evaluate_on_save or generate_only:
         official_accuracy = None
     else:
         official_accuracy = _run_local_eval(dataset_name, output_location, task_ids, no_cache=no_cache)
@@ -1479,7 +1480,11 @@ Examples:
              "config becomes single_sweagent.yaml."
     )
 
+    parser.add_argument('--generate-only', action='store_true',
+                        help='Baseline: save patches without running the host local evaluator; evaluate separately in offline Docker.')
     args = parser.parse_args()
+    if args.generate_only and args.baseline is None:
+        parser.error('--generate-only requires --baseline')
 
     # Determine pool directory
     pool_dir = get_pool_dir(args.dataset, args.pool_dir)
@@ -1517,6 +1522,7 @@ Examples:
                 repo_filter=args.repo,
                 evaluate_on_save=args.evaluate_on_save,
                 task_timeout=args.task_timeout,
+                generate_only=args.generate_only,
             )
         else:
             # Run evolution pipeline

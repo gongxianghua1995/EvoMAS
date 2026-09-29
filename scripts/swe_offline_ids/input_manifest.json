@@ -1,0 +1,27 @@
+{
+  "bundle": "evomas-swe-inputs.tar.gz",
+  "bundle_sha256": "40c646e5b811b0ed77cad2a90f62d0f6826335d25b8ffc3d139a13caaad6b874",
+  "note": "Full local benchmark inputs; distributed separately from Git. Contains gold/test metadata for evaluator only, no experiment predictions or model credentials.",
+  "files": {
+    "dataset/swe_bench_verified/test.json": {
+      "sha256": "eca9fe84fd0be7d004e4852435d09fbf465279e6a9ee9ccadba7cc6b0fc27744",
+      "bytes": 8243396
+    },
+    "dataset/swe_bench_verified/tasks_map.json": {
+      "sha256": "bf4c2f206bd1f3d01e181225d638cdda4f48946f1733591724c85bff4bf65962",
+      "bytes": 5737591
+    },
+    "dataset/swe_bench_pro/test.json": {
+      "sha256": "0180d5548216f8fbd91eea60368624eeee9147f89af334cce21ea931cdb6c58e",
+      "bytes": 22682434
+    },
+    "dataset/swe_bench_pro/tasks_map.json": {
+      "sha256": "1554ec44fb91017db3c75e9a1719edccd63f026870093eacb9a84e8b0f2d6590",
+      "bytes": 11276381
+    },
+    "dataset/swe_bench_verified/eval.jsonl": {
+      "sha256": "b82c234517d04d63effaa982f5c187b63952400df61f99529e12ca8fc3222c5c",
+      "bytes": 2691851
+    }
+  }
+}

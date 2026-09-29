@@ -305,12 +305,19 @@ def eval_instance(domain: str, iid: str, patch: str, spec: dict, timeout: int) -
     container = f"sweap-eval-{uuid.uuid4().hex[:8]}"
     report = {"instance_id": iid, "domain": domain}
 
-    rc, out = docker(["run", "-d", "--label", "owner=evomas", "--entrypoint=",
+    rc, out = docker(["run", "-d", "--network", "none", "--pull=never",
+                      "--label", "owner=evomas", "--entrypoint=",
                       "--name", container, tag, "sleep", "infinity"], timeout=300)
     if rc != 0:
         return {"status": "ERROR", "reason": f"container start failed: {out[-200:]}"}
 
     try:
+        from swe_offline_container import verify_network
+        rc, inspection = docker(['inspect', container], timeout=30)
+        if rc:
+            raise RuntimeError('Cannot inspect evaluation container network')
+        verify_network(json.loads(inspection)[0])
+        report['network_mode'] = 'none'
         # Write patches on host then docker cp
         model_p = Path(f"/tmp/model_{container}.patch")
         test_p = Path(f"/tmp/test_{container}.patch")
@@ -483,6 +490,7 @@ def merge_results(domain: str, report_dir: Path, output_root: Path, fresh: dict 
 
 
 def main():
+    global DEFAULT_MODEL
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--domain", required=True, choices=DOMAINS + ["all"])
     p.add_argument("--max-workers", type=int, default=4)
@@ -492,7 +500,9 @@ def main():
     p.add_argument("--skip-existing", action="store_true")
     p.add_argument("--instance-ids", default=None, help="comma-separated instance ids")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument('--model-name', default=DEFAULT_MODEL)
     args = p.parse_args()
+    DEFAULT_MODEL = args.model_name
 
     domains = DOMAINS if args.domain == "all" else [args.domain]
     iids = [s.strip() for s in args.instance_ids.split(",") if s.strip()] if args.instance_ids else None

@@ -45,3 +45,6 @@ output_backup/
 !.env.example
 # Local benchmark input copies; publish split IDs and input hashes instead.
 /dataset/swe_bench_pro/
+/dataset/swe_bench_verified/eval.jsonl
+!scripts/test_swe_offline.py
+!scripts/test_swe_offline_container.py

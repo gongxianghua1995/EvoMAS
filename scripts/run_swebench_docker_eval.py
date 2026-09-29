@@ -68,6 +68,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 DATASET_NAME = "SWE-bench/SWE-bench_Verified"
 SPLIT = "test"
 DEFAULT_MODEL = "chatdev_Deepseek-V4-Flash-0731"
+RUN_ID_PREFIX = 'evomas_docker'
 DEFAULT_REPORT_DIR = str(Path(__file__).resolve().parent.parent / "logs" / "swebench_reports")
 DOMAINS = ["django", "sympy", "matplotlib", "scikit-learn", "sphinx"]
 
@@ -175,13 +176,15 @@ def run_domain(
         return
 
     import swebench
+    import swebench.harness.run_evaluation as harness
+    from scripts.swe_offline_container import create_offline_container
     from swebench.harness.utils import load_swebench_dataset
 
     instance_ids = [p["instance_id"] for p in predictions]
 
     if skip_existing:
         # Filter out instances that already have a report.json
-        run_id = f"evomas_docker_{domain}"
+        run_id = f"{RUN_ID_PREFIX}_{domain}"
         kept = []
         skipped = 0
         for iid in instance_ids:
@@ -199,10 +202,12 @@ def run_domain(
             print(f"[{domain}] nothing to do")
             return
 
-    run_id = f"evomas_docker_{domain}"
+    run_id = f"{RUN_ID_PREFIX}_{domain}"
     print(f"[{domain}] run_id={run_id}  instances={len(instance_ids)}")
     print(f"[{domain}] calling swebench.run_evaluation...")
 
+    original_create = harness.create_container
+    harness.create_container = create_offline_container
     try:
         summary = swebench.run_evaluation(
             dataset_name=DATASET_NAME,
@@ -227,7 +232,9 @@ def run_domain(
     except Exception as e:
         print(f"[{domain}] run_evaluation EXCEPTION: {e}")
         traceback.print_exc()
-        return
+        raise
+    finally:
+        harness.create_container = original_create
 
     merge_results_back(domain, run_id, report_dir, model_name, output_root)
 
@@ -365,6 +372,7 @@ def merge_results_back(
 
 
 def main():
+    global DEFAULT_MODEL, RUN_ID_PREFIX, DATASET_NAME
     p = argparse.ArgumentParser(
         description="Run SWE-bench docker-based eval for EvoMAS ChatDev "
                     "baseline results.",
@@ -400,13 +408,20 @@ def main():
                    help="Comma-separated list of instance_ids to evaluate; "
                         "if set, only runs these instances, loads their .txt "
                         "files explicitly.")
+    p.add_argument('--run-id-prefix', default=RUN_ID_PREFIX,
+                   help='Unique experiment prefix; avoids reusing old harness results')
+    p.add_argument('--dataset-path', default=DATASET_NAME,
+                   help='Prepared official Verified JSON/JSONL or cached dataset name')
     args = p.parse_args()
+    DEFAULT_MODEL = args.model_name
+    RUN_ID_PREFIX = args.run_id_prefix
+    DATASET_NAME = args.dataset_path
 
     os.makedirs(args.report_dir, exist_ok=True)
 
     if args.merge_only:
         for d in (DOMAINS if args.domain == "all" else [args.domain]):
-            run_id = f"evomas_docker_{d}"
+            run_id = f"{RUN_ID_PREFIX}_{d}"
             merge_results_back(d, run_id, args.report_dir, args.model_name,
                                args.output_root)
         return

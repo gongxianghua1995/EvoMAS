@@ -1,0 +1,66 @@
+{
+  "date": "2026-09-29",
+  "base_commit": "a5201c7d39af400314ea03a4ea8f129aa0fcb4c9",
+  "checks": [
+    {
+      "project": "EvoMAS",
+      "benchmark": "verified",
+      "tasks": 154,
+      "domains": {
+        "django": 59,
+        "matplotlib": 23,
+        "sphinx": 33,
+        "sympy": 39
+      },
+      "input_sha256": "eca9fe84fd0be7d004e4852435d09fbf465279e6a9ee9ccadba7cc6b0fc27744",
+      "dependencies": {
+        "python": "3.11.15",
+        "mini-swe-agent": "2.4.6",
+        "swebench": "5.0.2"
+      },
+      "images_checked": 154,
+      "cli_commands_checked": 8,
+      "model_calls": 0,
+      "containers_started": 0,
+      "scope": "Imports, real CLI parsing, input selection, budget/config and read-only image availability; API quota and container execution not tested."
+    },
+    {
+      "project": "EvoMAS",
+      "benchmark": "pro",
+      "tasks": 216,
+      "domains": {
+        "ansible": 63,
+        "flipt": 54,
+        "openlibrary": 60,
+        "webclients": 39
+      },
+      "input_sha256": "0180d5548216f8fbd91eea60368624eeee9147f89af334cce21ea931cdb6c58e",
+      "dependencies": {
+        "python": "3.11.15",
+        "mini-swe-agent": "2.4.6",
+        "swebench": "5.0.2"
+      },
+      "images_checked": 216,
+      "cli_commands_checked": 8,
+      "model_calls": 0,
+      "containers_started": 0,
+      "scope": "Imports, real CLI parsing, input selection, budget/config and read-only image availability; API quota and container execution not tested."
+    }
+  ],
+  "launcher_regression_tests_passed": 11,
+  "additional_smoke": "Verified/Pro evaluator dry-run discovers case-sensitive model directories; no Docker or harness execution.",
+  "runtime_executed": false,
+  "source_sha256": {
+    "main.py": "be73521e3b114984670f41d5c889d90bbe27329b0cd02ae31fe35e853c093451",
+    "scripts/run_swebench_docker_eval.py": "77866083c7cae07fd41cfe520ada2482cdd1f36a28ee734bac982d06658f74df",
+    "scripts/run_swebench_pro_eval.py": "71e043e84fe837d788fe928b06564f48d195c9cb0cbd85437e173a1d87d4117c",
+    "scripts/swe_offline.py": "21ed96dddce2aba7bac851c736fd6845ba8899011ff641e200c74fd757b74bb5",
+    "scripts/swe_offline_container.py": "a012b2875fc93b70816167ad61435ef18d156d5d1c827ac0e0fa9977ea5ccac1",
+    "scripts/swe_offline_ids/input_manifest.json": "97c50153b612543ceb7821d8cdcee4d5f12ee0fb6f829b51f6c72051a7c20f44",
+    "scripts/swe_offline_ids/pro.txt": "15bb5a29693292502c14f990ce8be3a6271eefa3371edfc481d08c6c24e2d3d3",
+    "scripts/swe_offline_ids/verified.txt": "51f7b57853da9bdb9ef5f4aa1d16ff8586dd8c683653f1928402f8c9f05b5240",
+    "scripts/test_swe_offline.py": "77da68c577def3a87b00c4599349f43586e6a15d403431acadb82dce2b18467d",
+    "scripts/test_swe_offline_container.py": "11cb9006e47e8ad96fc3e6efd04864950f2542f8abb175e329e16aa6044bee39"
+  },
+  "limits": "This validates existing environments and launch wiring. No paid API request, benchmark execution, image pull/build or container creation. It does not establish model capability, quota availability, clean-machine installation or in-container test validity."
+}
