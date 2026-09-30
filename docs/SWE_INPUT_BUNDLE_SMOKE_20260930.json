@@ -1,0 +1,85 @@
+{
+  "date": "2026-09-30",
+  "base_commit": "c9a80e690bd14eb1974ed2d788392d61d4297a2f",
+  "bundle": "evomas-swe-inputs.tar.gz",
+  "clean_directory_restore": {
+    "restored_files": 5,
+    "second_restore_unchanged": true,
+    "selections": {
+      "verified": {
+        "tasks": 154,
+        "domains": {
+          "django": 59,
+          "matplotlib": 23,
+          "sphinx": 33,
+          "sympy": 39
+        }
+      },
+      "pro": {
+        "tasks": 216,
+        "domains": {
+          "ansible": 63,
+          "flipt": 54,
+          "openlibrary": 60,
+          "webclients": 39
+        }
+      }
+    }
+  },
+  "checks": [
+    {
+      "project": "EvoMAS",
+      "benchmark": "verified",
+      "tasks": 154,
+      "domains": {
+        "django": 59,
+        "matplotlib": 23,
+        "sphinx": 33,
+        "sympy": 39
+      },
+      "input_sha256": "eca9fe84fd0be7d004e4852435d09fbf465279e6a9ee9ccadba7cc6b0fc27744",
+      "dependencies": {
+        "python": "3.11.15",
+        "mini-swe-agent": "2.4.6",
+        "swebench": "5.0.2"
+      },
+      "images_checked": 154,
+      "cli_commands_checked": 8,
+      "model_calls": 0,
+      "containers_started": 0,
+      "scope": "Imports, real CLI parsing, input selection, budget/config and read-only image availability; API quota and container execution not tested."
+    },
+    {
+      "project": "EvoMAS",
+      "benchmark": "pro",
+      "tasks": 216,
+      "domains": {
+        "ansible": 63,
+        "flipt": 54,
+        "openlibrary": 60,
+        "webclients": 39
+      },
+      "input_sha256": "0180d5548216f8fbd91eea60368624eeee9147f89af334cce21ea931cdb6c58e",
+      "dependencies": {
+        "python": "3.11.15",
+        "mini-swe-agent": "2.4.6",
+        "swebench": "5.0.2"
+      },
+      "images_checked": 216,
+      "cli_commands_checked": 8,
+      "model_calls": 0,
+      "containers_started": 0,
+      "scope": "Imports, real CLI parsing, input selection, budget/config and read-only image availability; API quota and container execution not tested."
+    }
+  ],
+  "regression_tests_passed": 15,
+  "runtime_executed": false,
+  "source_sha256": {
+    "scripts/swe_offline.py": "48abb803c8892121036a678ab8de9df3022e0ba47955c471b7fb11f8f0e574d2",
+    "scripts/test_swe_offline.py": "579dfafae22e7c0ca2834b654712d340a11f51b3658a7dd71e94b590056a5ca4",
+    "scripts/swe_offline_ids/input_manifest.json": "b8b319e1da0a8a84d23f76494019aed30399aa0772c4b43943ea70364b2de5ab",
+    "scripts/swe_offline_ids/evomas-swe-inputs.tar.gz": "40c646e5b811b0ed77cad2a90f62d0f6826335d25b8ffc3d139a13caaad6b874",
+    "docs/SWE_OFFLINE_QUICKSTART.md": "217b5e50716828df736858e0663a41e75753b525c619115d7672edd66e2ce831"
+  },
+  "limits": "Bundle restoration tested in a temporary empty directory; CLI/dependency/image checks use existing server environments. No model requests, containers, benchmark execution, image downloads or clean-machine dependency installation."
+}

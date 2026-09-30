@@ -1,7 +1,7 @@
 {
   "bundle": "evomas-swe-inputs.tar.gz",
   "bundle_sha256": "40c646e5b811b0ed77cad2a90f62d0f6826335d25b8ffc3d139a13caaad6b874",
-  "note": "Full local benchmark inputs; distributed separately from Git. Contains gold/test metadata for evaluator only, no experiment predictions or model credentials.",
+  "note": "Bundled with Git beside this manifest. The launcher restores missing default inputs and verifies SHA-256. Contains benchmark gold/test metadata, no experiment predictions or model credentials; see the quickstart for information-isolation limits.",
   "files": {
     "dataset/swe_bench_verified/test.json": {
       "sha256": "eca9fe84fd0be7d004e4852435d09fbf465279e6a9ee9ccadba7cc6b0fc27744",
